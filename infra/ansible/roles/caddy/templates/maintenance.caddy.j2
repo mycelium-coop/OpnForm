@@ -1,0 +1,6 @@
+{% if opnform_maintenance_enabled | bool %}
+handle {
+    header Retry-After "120"
+    respond "OpnForm is temporarily undergoing maintenance." 503
+}
+{% endif %}

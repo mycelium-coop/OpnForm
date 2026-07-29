@@ -1,0 +1,123 @@
+name: {{ opnform_project_name }}
+
+services:
+  api: &api_environment
+    image: {{ opnform_api_image }}
+    env_file:
+      - {{ opnform_project_dir }}/secrets/api.env
+    volumes:
+      - opnform_storage:/usr/share/nginx/html/storage:rw
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      opnform:
+    healthcheck:
+      test: ["CMD-SHELL", "php /usr/share/nginx/html/artisan about || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  api-worker:
+    <<: *api_environment
+    command: ["php", "artisan", "queue:work"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'php artisan queue:work' > /dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api-scheduler:
+    <<: *api_environment
+    command: ["php", "artisan", "schedule:work"]
+    healthcheck:
+      test: ["CMD-SHELL", "php /usr/share/nginx/html/artisan app:scheduler-status --mode=check --max-minutes=3 || exit 1"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 70s
+
+  ui:
+    image: {{ opnform_client_image }}
+    env_file:
+      - {{ opnform_project_dir }}/secrets/client.env
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      opnform:
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  redis:
+    image: {{ opnform_redis_image }}
+    env_file:
+      - {{ opnform_project_dir }}/secrets/api.env
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - redis_data:/data
+    networks:
+      opnform:
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  db:
+    image: {{ opnform_postgres_image }}
+    env_file:
+      - {{ opnform_project_dir }}/secrets/db.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      opnform:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  ingress:
+    image: {{ opnform_nginx_image }}
+    volumes:
+      - {{ opnform_project_dir }}/config/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_started
+      ui:
+        condition: service_started
+    networks:
+      opnform:
+        ipv4_address: {{ opnform_ingress_ip }}
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && curl -fsS http://localhost/api/healthcheck >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  opnform:
+    name: {{ opnform_project_name }}_network
+    ipam:
+      config:
+        - subnet: {{ opnform_docker_subnet }}
+
+volumes:
+  postgres_data:
+    name: {{ opnform_project_name }}_postgres_data
+  opnform_storage:
+    name: {{ opnform_project_name }}_opnform_storage
+  redis_data:
+    name: {{ opnform_project_name }}_redis_data

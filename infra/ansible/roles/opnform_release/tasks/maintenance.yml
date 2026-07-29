@@ -1,0 +1,24 @@
+---
+- name: Render OpnForm maintenance mode
+  ansible.builtin.template:
+    src: maintenance.caddy.j2
+    dest: "{{ opnform_maintenance_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Validate Caddy maintenance configuration
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - "{{ opnform_caddy_config_path }}"
+      - --adapter
+      - caddyfile
+  changed_when: false
+
+- name: Reload Caddy maintenance configuration
+  ansible.builtin.service:
+    name: "{{ opnform_caddy_service_name }}"
+    state: reloaded

@@ -1,0 +1,109 @@
+---
+- name: Require a digest-pinned release bundle
+  ansible.builtin.assert:
+    that:
+      - opnform_release_id | length > 0
+      - opnform_release_id is match('^sha-[0-9a-f]{40}$')
+      - opnform_api_image is match('.*@sha256:[a-f0-9]{64}$')
+      - opnform_client_image is match('.*@sha256:[a-f0-9]{64}$')
+    fail_msg: A SHA-named release with digest-pinned API and client images is required.
+
+- name: Check for an existing successful release
+  ansible.builtin.stat:
+    path: "{{ opnform_project_dir }}/current/docker-compose.yml"
+  register: opnform_current_release_stat
+
+- name: Set initial-deployment state
+  ansible.builtin.set_fact:
+    opnform_first_deploy: "{{ not opnform_current_release_stat.stat.exists }}"
+
+- name: Enter maintenance mode before release
+  ansible.builtin.include_tasks: maintenance.yml
+  vars:
+    opnform_maintenance_enabled: true
+
+- name: Deploy the release with rollback protection
+  block:
+    - name: Create a pre-release encrypted backup
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/opnform-backup]
+      register: opnform_release_backup
+      changed_when: false
+      no_log: true
+      when: not opnform_first_deploy | bool
+
+    - name: Pull immutable release images
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_release_id }}/docker-compose.yml"
+          - pull
+      changed_when: true
+
+    - name: Start the immutable release and wait for health checks
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_release_id }}/docker-compose.yml"
+          - up
+          - -d
+          - --wait
+          - --wait-timeout
+          - '300'
+          - --remove-orphans
+      changed_when: true
+
+    - name: Set the current release symlink only after successful startup
+      ansible.builtin.file:
+        src: "{{ opnform_release_dir }}/{{ opnform_release_id }}"
+        dest: "{{ opnform_project_dir }}/current"
+        state: link
+        force: true
+
+    - name: Leave maintenance mode after an existing-instance release
+      ansible.builtin.include_tasks: maintenance.yml
+      vars:
+        opnform_maintenance_enabled: false
+      when: not opnform_first_deploy | bool
+  rescue:
+    - name: Restore the previous release containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_compose_file }}"
+          - up
+          - -d
+          - --wait
+          - --wait-timeout
+          - '300'
+      changed_when: true
+      when: not opnform_first_deploy | bool
+
+    - name: Restore the pre-release database and uploads snapshot
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/opnform-restore-snapshot
+          - "{{ opnform_release_backup.stdout | trim }}"
+      changed_when: true
+      no_log: true
+      when:
+        - not opnform_first_deploy | bool
+        - opnform_release_backup is defined
+        - not (opnform_release_backup.failed | default(true) | bool)
+        - opnform_release_backup.stdout | default('') | trim | length > 0
+
+    - name: Reopen the previous release after rollback
+      ansible.builtin.include_tasks: maintenance.yml
+      vars:
+        opnform_maintenance_enabled: false
+      when: not opnform_first_deploy | bool
+
+    - name: Stop after failed release rollback
+      ansible.builtin.fail:
+        msg: Release failed. The previous release and its pre-release backup were restored when available.

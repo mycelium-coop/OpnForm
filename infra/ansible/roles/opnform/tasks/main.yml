@@ -1,0 +1,92 @@
+---
+- name: Require immutable release image references
+  ansible.builtin.assert:
+    that:
+      - opnform_release_id | length > 0
+      - opnform_api_image is match('.*@sha256:[a-f0-9]{64}$')
+      - opnform_client_image is match('.*@sha256:[a-f0-9]{64}$')
+      - opnform_postgres_image is match('.*@sha256:[a-f0-9]{64}$')
+      - opnform_redis_image is match('.*@sha256:[a-f0-9]{64}$')
+      - opnform_nginx_image is match('.*@sha256:[a-f0-9]{64}$')
+    fail_msg: All application and dependency images must be immutable digest references.
+
+- name: Create OpnForm runtime directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: '{{ opnform_project_dir }}', mode: '0700' }
+    - { path: '{{ opnform_project_dir }}/config', mode: '0700' }
+    - { path: '{{ opnform_project_dir }}/secrets', mode: '0700' }
+    - { path: '{{ opnform_release_dir }}', mode: '0700' }
+    - { path: '{{ opnform_release_dir }}/{{ opnform_release_id }}', mode: '0700' }
+    - { path: '{{ opnform_backup_dir }}', mode: '0700' }
+
+- name: Authenticate root Docker client to GHCR with the read-only token
+  community.docker.docker_login:
+    registry_url: "{{ lookup('ansible.builtin.env', 'GHCR_HOST') }}"
+    username: "{{ lookup('ansible.builtin.env', 'GHCR_PULL_USERNAME') }}"
+    password: "{{ lookup('ansible.builtin.env', 'GHCR_PULL_TOKEN') }}"
+    reauthorize: true
+  no_log: true
+
+- name: Render OpnForm API environment
+  ansible.builtin.template:
+    src: api.env.j2
+    dest: "{{ opnform_project_dir }}/secrets/api.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Render OpnForm database environment
+  ansible.builtin.template:
+    src: db.env.j2
+    dest: "{{ opnform_project_dir }}/secrets/db.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Render OpnForm client environment
+  ansible.builtin.template:
+    src: client.env.j2
+    dest: "{{ opnform_project_dir }}/secrets/client.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Render ingress Nginx configuration
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: "{{ opnform_project_dir }}/config/nginx.conf"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Render immutable OpnForm Compose release bundle
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ opnform_release_dir }}/{{ opnform_release_id }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Validate the immutable Compose release bundle
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ opnform_release_dir }}/{{ opnform_release_id }}/docker-compose.yml"
+      - config
+      - --quiet
+  changed_when: false
+  no_log: true

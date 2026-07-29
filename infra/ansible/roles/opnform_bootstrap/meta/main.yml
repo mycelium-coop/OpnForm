@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  author: OpnForm
+  description: Creates the first admin and optionally provisions the initial OIDC connection.
+  min_ansible_version: '2.20'
+dependencies: []

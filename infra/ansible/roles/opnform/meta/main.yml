@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  author: OpnForm
+  description: Renders isolated OpnForm release bundles and secure runtime configuration.
+  min_ansible_version: '2.20'
+dependencies: []

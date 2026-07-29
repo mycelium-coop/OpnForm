@@ -1,0 +1,26 @@
+---
+- name: Check Docker Compose service state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ opnform_compose_file }}"
+      - ps
+      - --format
+      - json
+  register: opnform_compose_status
+  changed_when: false
+
+- name: Assert every OpnForm service is healthy or running
+  ansible.builtin.assert:
+    that:
+      - opnform_compose_status.stdout | length > 0
+      - "'unhealthy' not in opnform_compose_status.stdout"
+    fail_msg: Docker Compose reports an unhealthy OpnForm service.
+
+- name: Check the private OpnForm health endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/healthcheck
+    status_code: 200
+    return_content: false

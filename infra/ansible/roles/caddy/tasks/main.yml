@@ -1,0 +1,217 @@
+---
+- name: Check whether Caddy is already installed
+  ansible.builtin.command:
+    argv: [caddy, version]
+  register: opnform_caddy_version
+  changed_when: false
+  failed_when: false
+
+- name: Set Caddy installation state
+  ansible.builtin.set_fact:
+    opnform_caddy_existing: "{{ opnform_caddy_version.rc == 0 }}"
+
+- name: Install Caddy when absent
+  ansible.builtin.import_tasks: install.yml
+  when: not opnform_caddy_existing | bool
+
+- name: Read installed Caddy version
+  ansible.builtin.command:
+    argv: [caddy, version]
+  register: opnform_caddy_installed_version
+  changed_when: false
+
+- name: Require native Caddy v2
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_installed_version.stdout is search('v?2\\.')
+      - opnform_hostname | length > 0
+      - opnform_caddy_email | length > 0
+    fail_msg: A supported native Caddy v2, hostname, and Caddy email are required.
+
+- name: Check the configured Caddyfile exists
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_config_path }}"
+  register: opnform_caddy_config_stat
+
+- name: Require the configured Caddyfile
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_config_stat.stat.exists
+    fail_msg: "Caddyfile not found at {{ opnform_caddy_config_path }}; custom JSON and non-systemd layouts are unsupported."
+
+- name: Gather service facts for Caddy preflight
+  ansible.builtin.service_facts:
+
+- name: Require a native systemd Caddy service
+  ansible.builtin.assert:
+    that:
+      - "(opnform_caddy_service_name ~ '.service') in ansible_facts.services"
+    fail_msg: "{{ opnform_caddy_service_name }}.service is required; containerized and custom Caddy launchers are unsupported."
+
+- name: Validate existing Caddy configuration before changes
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - "{{ opnform_caddy_config_path }}"
+      - --adapter
+      - caddyfile
+  changed_when: false
+
+- name: Check for a conflicting OpnForm hostname in unmanaged Caddy snippets
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -R
+      - --fixed-strings
+      - --exclude=opnform.caddy
+      - "{{ opnform_hostname }}"
+      - /etc/caddy
+  register: opnform_caddy_hostname_conflict
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to overwrite an unmanaged Caddy hostname
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_hostname_conflict.rc != 0
+    fail_msg: "{{ opnform_hostname }} already appears in unmanaged Caddy configuration; resolve it before deployment."
+
+- name: Fetch Cloudflare IPv4 address ranges
+  ansible.builtin.uri:
+    url: https://www.cloudflare.com/ips-v4
+    return_content: true
+    status_code: 200
+  register: opnform_cloudflare_ipv4_response
+  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
+
+- name: Fetch Cloudflare IPv6 address ranges
+  ansible.builtin.uri:
+    url: https://www.cloudflare.com/ips-v6
+    return_content: true
+    status_code: 200
+  register: opnform_cloudflare_ipv6_response
+  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
+
+- name: Set Cloudflare proxy ranges
+  ansible.builtin.set_fact:
+    opnform_cloudflare_proxy_ranges: "{{ (opnform_cloudflare_ipv4_response.content.splitlines() + opnform_cloudflare_ipv6_response.content.splitlines()) | reject('equalto', '') | list }}"
+  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
+
+- name: Set empty proxy ranges when Cloudflare origin lockdown is disabled
+  ansible.builtin.set_fact:
+    opnform_cloudflare_proxy_ranges: []
+  when: not (opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool)
+
+- name: Create Caddy snippet and backup directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ opnform_caddy_snippet_dir }}"
+    - /var/backups/opnform/caddy
+
+- name: Check whether an OpnForm Caddy snippet already exists
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+  register: opnform_caddy_site_stat
+
+- name: Safely install the OpnForm Caddy configuration
+  block:
+    - name: Back up the Caddyfile
+      ansible.builtin.copy:
+        src: "{{ opnform_caddy_config_path }}"
+        dest: "/var/backups/opnform/caddy/Caddyfile.before-opnform"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Back up the existing OpnForm Caddy snippet
+      ansible.builtin.copy:
+        src: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        dest: /var/backups/opnform/caddy/opnform.caddy.before-opnform
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: opnform_caddy_site_stat.stat.exists
+
+    - name: Add the managed Caddy snippet import
+      ansible.builtin.lineinfile:
+        path: "{{ opnform_caddy_config_path }}"
+        line: "import {{ opnform_caddy_snippet_dir }}/*.caddy"
+        regexp: "^import {{ opnform_caddy_snippet_dir | regex_escape }}\\/\\*\\.caddy$"
+        insertafter: EOF
+
+    - name: Render the OpnForm Caddy site
+      ansible.builtin.template:
+        src: opnform.caddy.j2
+        dest: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Render initial OpnForm maintenance mode
+      ansible.builtin.template:
+        src: maintenance.caddy.j2
+        dest: "{{ opnform_maintenance_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        opnform_maintenance_enabled: true
+
+    - name: Validate staged Caddy configuration
+      ansible.builtin.command:
+        argv:
+          - caddy
+          - validate
+          - --config
+          - "{{ opnform_caddy_config_path }}"
+          - --adapter
+          - caddyfile
+      changed_when: false
+
+    - name: Reload validated Caddy configuration
+      ansible.builtin.service:
+        name: "{{ opnform_caddy_service_name }}"
+        state: reloaded
+  rescue:
+    - name: Restore the previous Caddyfile
+      ansible.builtin.copy:
+        src: /var/backups/opnform/caddy/Caddyfile.before-opnform
+        dest: "{{ opnform_caddy_config_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Restore the previous OpnForm Caddy snippet
+      ansible.builtin.copy:
+        src: /var/backups/opnform/caddy/opnform.caddy.before-opnform
+        dest: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: opnform_caddy_site_stat.stat.exists
+
+    - name: Remove a newly-created invalid OpnForm snippet
+      ansible.builtin.file:
+        path: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        state: absent
+      when: not opnform_caddy_site_stat.stat.exists
+
+    - name: Reload the restored Caddy configuration
+      ansible.builtin.service:
+        name: "{{ opnform_caddy_service_name }}"
+        state: reloaded
+
+    - name: Fail after restoring the previous Caddy configuration
+      ansible.builtin.fail:
+        msg: OpnForm Caddy configuration failed validation or reload and was restored.

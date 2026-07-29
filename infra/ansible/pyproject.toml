@@ -1,0 +1,15 @@
+[project]
+name = "opnform-infrastructure"
+version = "0.1.0"
+description = "Python tooling for provisioning and deploying OpnForm"
+requires-python = ">=3.12"
+dependencies = [
+    "ansible==13.5.0",
+    "ansible-core==2.20.4",
+    "ansible-lint==25.12.1",
+    "molecule==25.12.0",
+    "molecule-plugins[podman]==25.8.12",
+]
+
+[tool.uv]
+package = false

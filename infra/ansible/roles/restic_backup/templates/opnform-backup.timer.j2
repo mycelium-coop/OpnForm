@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly encrypted OpnForm backup
+
+[Timer]
+OnCalendar={{ opnform_backup_schedule }}
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

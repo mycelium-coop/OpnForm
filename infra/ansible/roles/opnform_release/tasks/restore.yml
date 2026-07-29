@@ -1,0 +1,28 @@
+---
+- name: Require explicit restore confirmation
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'CONFIRM_RESTORE', default='') == opnform_deployment_name
+      - lookup('ansible.builtin.env', 'OPNFORM_RESTORE_SNAPSHOT', default='') is match('^([0-9a-f]{8,64}|latest)$')
+    fail_msg: Set CONFIRM_RESTORE to the deployment name and provide a valid snapshot ID.
+
+- name: Enter maintenance mode before restore
+  ansible.builtin.include_tasks: maintenance.yml
+  vars:
+    opnform_maintenance_enabled: true
+
+- name: Restore the requested encrypted snapshot
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/opnform-restore-snapshot
+      - "{{ lookup('ansible.builtin.env', 'OPNFORM_RESTORE_SNAPSHOT') }}"
+  changed_when: true
+  no_log: true
+
+- name: Verify restored services
+  ansible.builtin.include_tasks: smoke.yml
+
+- name: Leave maintenance mode after successful restore
+  ansible.builtin.include_tasks: maintenance.yml
+  vars:
+    opnform_maintenance_enabled: false

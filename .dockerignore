@@ -1,7 +1,10 @@
 /.git
 /Dockerfile
 /data
-\.env
+.env
+/.deploy
+/infra/ansible/.collections
+/infra/ansible/.venv
 
 # API ignores
 api/vendor/

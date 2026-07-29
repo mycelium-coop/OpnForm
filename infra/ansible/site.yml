@@ -1,0 +1,29 @@
+---
+- name: Provision and deploy OpnForm
+  hosts: opnform
+  gather_facts: true
+  become: true
+  roles:
+    - role: host_hardening
+      tags: [host_hardening]
+    - role: docker_engine
+      tags: [docker_engine]
+    - role: caddy
+      tags: [caddy]
+    - role: opnform
+      tags: [opnform]
+    - role: restic_backup
+      tags: [restic_backup]
+    - role: opnform_release
+      tags: [opnform_release]
+    - role: opnform_bootstrap
+      tags: [opnform_bootstrap]
+
+- name: Verify deployed OpnForm services
+  hosts: opnform
+  gather_facts: false
+  become: true
+  roles:
+    - role: opnform_release
+      tasks_from: smoke.yml
+      tags: [opnform_smoke]

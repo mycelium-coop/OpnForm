@@ -1,0 +1,11 @@
+---
+all:
+  children:
+    opnform:
+      hosts:
+        opnform-production:
+          ansible_host: 203.0.113.10
+          ansible_user: debian
+          ansible_port: 22
+          ansible_ssh_private_key_file: /absolute/path/to/deploy-key
+          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes'

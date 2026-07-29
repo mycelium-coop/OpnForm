@@ -1,0 +1,5 @@
+---
+opnform_hostname: ''
+opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
+opnform_caddy_config_path: /etc/caddy/Caddyfile
+opnform_caddy_service_name: caddy

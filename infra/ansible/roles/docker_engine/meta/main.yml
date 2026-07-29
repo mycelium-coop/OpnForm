@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  author: OpnForm
+  description: Installs Docker Engine and Docker Compose v2 from Docker's repository.
+  min_ansible_version: '2.20'
+dependencies: []

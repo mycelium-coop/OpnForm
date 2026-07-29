@@ -1,0 +1,80 @@
+---
+- name: Require a valid retained release identifier
+  ansible.builtin.assert:
+    that:
+      - opnform_rollback_release is match('^sha-[0-9a-f]{40}$')
+    fail_msg: Rollback requires a retained SHA release ID.
+
+- name: Check the rollback release bundle exists
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/docker-compose.yml"
+  register: opnform_rollback_bundle
+
+- name: Require the rollback release bundle
+  ansible.builtin.assert:
+    that:
+      - opnform_rollback_bundle.stat.exists
+    fail_msg: The requested rollback release is not retained on this VPS.
+
+- name: Enter maintenance mode before rollback
+  ansible.builtin.include_tasks: maintenance.yml
+  vars:
+    opnform_maintenance_enabled: true
+
+- name: Roll back with recovery protection
+  block:
+    - name: Create an encrypted backup before rollback
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/opnform-backup]
+      changed_when: false
+      no_log: true
+
+    - name: Start the retained rollback release
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/docker-compose.yml"
+          - up
+          - -d
+          - --wait
+          - --wait-timeout
+          - '300'
+          - --remove-orphans
+      changed_when: true
+
+    - name: Point current release at the retained release
+      ansible.builtin.file:
+        src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}"
+        dest: "{{ opnform_project_dir }}/current"
+        state: link
+        force: true
+
+    - name: Leave maintenance mode after rollback
+      ansible.builtin.include_tasks: maintenance.yml
+      vars:
+        opnform_maintenance_enabled: false
+  rescue:
+    - name: Restore the current release containers after failed rollback
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_compose_file }}"
+          - up
+          - -d
+          - --wait
+          - --wait-timeout
+          - '300'
+      changed_when: true
+
+    - name: Leave maintenance mode after failed rollback
+      ansible.builtin.include_tasks: maintenance.yml
+      vars:
+        opnform_maintenance_enabled: false
+
+    - name: Stop after restoring the current release
+      ansible.builtin.fail:
+        msg: Rollback failed. The current release was restored and reopened.

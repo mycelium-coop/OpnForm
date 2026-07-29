@@ -1,0 +1,30 @@
+{{ opnform_hostname }} {
+    tls {{ opnform_caddy_email }}
+    encode zstd gzip
+
+    header {
+        -Server
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    import {{ opnform_maintenance_file }}
+
+{% if opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool %}
+    @cloudflare remote_ip {{ opnform_cloudflare_proxy_ranges | join(' ') }}
+    handle @cloudflare {
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+            header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+            header_up X-Forwarded-Proto https
+        }
+    }
+    handle {
+        respond "Origin access denied" 403
+    }
+{% else %}
+    reverse_proxy 127.0.0.1:8080
+{% endif %}
+}

@@ -1,0 +1,10 @@
+---
+opnform_caddy_service_name: caddy
+opnform_caddy_config_path: /etc/caddy/Caddyfile
+opnform_caddy_snippet_dir: /etc/caddy/conf.d
+opnform_caddy_package_version: ''
+opnform_caddy_email: ''
+opnform_cloudflare_proxied: true
+opnform_caddy_origin_lockdown: true
+opnform_hostname: ''
+opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
