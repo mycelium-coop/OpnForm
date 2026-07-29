@@ -1,0 +1,2 @@
+---
+opnform_docker_apt_distribution: "{{ ansible_facts.distribution | lower }}"

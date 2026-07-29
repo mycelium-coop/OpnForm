@@ -1,0 +1,8 @@
+---
+- name: Deploy an immutable release
+  ansible.builtin.import_tasks: deploy.yml
+  when: opnform_rollback_release | length == 0
+
+- name: Roll back to a retained release
+  ansible.builtin.import_tasks: rollback.yml
+  when: opnform_rollback_release | length > 0

@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  author: OpnForm
+  description: Performs backup-protected immutable OpnForm releases and rollbacks.
+  min_ansible_version: '2.20'
+dependencies: []

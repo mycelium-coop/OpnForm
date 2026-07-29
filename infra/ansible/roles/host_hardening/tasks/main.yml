@@ -1,0 +1,113 @@
+---
+- name: Assert a supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+    fail_msg: OpnForm automation supports Debian 12/13 and Ubuntu 24.04 only.
+
+- name: Update APT package metadata
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install host security packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - fail2ban
+      - unattended-upgrades
+      - ufw
+      - curl
+      - jq
+      - rsync
+    state: present
+
+- name: Create the deployment user
+  ansible.builtin.user:
+    name: "{{ opnform_deploy_user }}"
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    create_home: true
+    state: present
+
+- name: Install the deployment SSH public key
+  ansible.posix.authorized_key:
+    user: "{{ opnform_deploy_user }}"
+    state: present
+    key: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'SSH_PUBLIC_KEY_PATH')) }}"
+
+- name: Allow the deployment user passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ opnform_deploy_user }}"
+    content: "{{ opnform_deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Harden SSH daemon settings
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-opnform-hardening.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      UsePAM yes
+      Port {{ opnform_ssh_port }}
+    owner: root
+    group: root
+    mode: '0644'
+    validate: /usr/sbin/sshd -t -f %s
+  notify: host_hardening restart ssh
+
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Enable automatic package update timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+
+- name: Require allowed SSH networks before configuring a new-VPS firewall
+  ansible.builtin.assert:
+    that:
+      - opnform_ssh_allowed_cidrs | trim | length > 0
+    fail_msg: SSH_ALLOWED_CIDRS is required before enabling the new-VPS firewall.
+  when: opnform_manage_firewall | bool
+
+- name: Allow SSH from administrative networks on a new VPS
+  community.general.ufw:
+    rule: allow
+    port: "{{ opnform_ssh_port }}"
+    proto: tcp
+    from_ip: "{{ item | trim }}"
+  loop: "{{ opnform_ssh_allowed_cidrs.split(',') }}"
+  when: opnform_manage_firewall | bool
+
+- name: Allow public web traffic on a new VPS
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ['80', '443']
+  when: opnform_manage_firewall | bool
+
+- name: Deny other inbound traffic on a new VPS
+  community.general.ufw:
+    direction: incoming
+    default: deny
+  when: opnform_manage_firewall | bool
+
+- name: Enable the new-VPS firewall
+  community.general.ufw:
+    state: enabled
+  when: opnform_manage_firewall | bool

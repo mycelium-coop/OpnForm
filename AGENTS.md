@@ -116,3 +116,42 @@ docker exec opnform-api sh -c "curl -sS https://getcomposer.org/installer | php 
 docker exec opnform-api composer install --no-interaction --optimize-autoloader
 docker restart opnform-api
 ```
+
+# Ansible Automation
+
+## Project Stack
+- ansible-core 2.20.4, Ansible community package 13.5.0
+- Python 3.12+ required for controller and managed nodes
+- Python dependencies and the controller `.venv` are managed by `uv` from
+  `infra/ansible/pyproject.toml` and `infra/ansible/uv.lock`.
+- Execution Environments built with ansible-builder 3.x
+- Molecule 25.x for role testing with Podman driver
+
+## Anti-Hallucination Rules
+- NEVER invent module parameters. Check `ansible-doc <module>` first.
+- NEVER use deprecated `include:` — use `ansible.builtin.include_tasks`
+  or `ansible.builtin.import_tasks` with FQCNs.
+- ALL module references MUST use fully qualified collection names (FQCNs):
+  `ansible.builtin.copy`, NOT `copy`.
+- Handler names are global within a play. NEVER duplicate handler names
+  across roles unless intentionally overriding.
+- `become: true` is required for privilege escalation. Do NOT assume
+  root access on managed hosts.
+- Ansible 13 dropped Python 3.10 support on the controller. Do NOT
+  generate code targeting Python < 3.11.
+
+## Verification Commands
+- Environment sync: `just python-sync`
+- Lint: `(cd infra/ansible && uv run --locked -- ansible-lint --strict site.yml restore.yml roles/)`
+- Syntax check: `(cd infra/ansible && uv run --locked -- ansible-playbook --syntax-check site.yml)`
+- Dry run: `(cd infra/ansible && uv run --locked -- ansible-playbook --check --diff site.yml)`
+- Molecule test: `(cd infra/ansible && uv run --locked -- molecule test)`
+- Collection build: `(cd infra/ansible && uv run --locked -- ansible-galaxy collection build --force)`
+
+## Directory Conventions
+- `roles/` — one directory per role, each with `tasks/`, `handlers/`,
+  `defaults/`, `meta/`, `molecule/`
+- `inventories/` — per-environment inventory (dev, staging, prod)
+- `group_vars/` and `host_vars/` — variable hierarchy
+- `collections/requirements.yml` — pinned collection dependencies
+- `execution-environments/` — EE definitions for ansible-builder

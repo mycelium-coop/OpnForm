@@ -1,0 +1,8 @@
+---
+- name: Restore an OpnForm restic snapshot
+  hosts: opnform
+  gather_facts: false
+  become: true
+  roles:
+    - role: opnform_release
+      tasks_from: restore.yml

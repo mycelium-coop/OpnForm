@@ -1,0 +1,76 @@
+---
+- name: Install restic backup dependencies
+  ansible.builtin.apt:
+    name:
+      - restic
+      - jq
+      - rsync
+    state: present
+    update_cache: true
+
+- name: Create the protected backup environment directory
+  ansible.builtin.file:
+    path: "{{ opnform_project_dir }}/secrets"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render encrypted backup environment
+  ansible.builtin.template:
+    src: backup.env.j2
+    dest: "{{ opnform_project_dir }}/secrets/backup.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Install the OpnForm backup command
+  ansible.builtin.template:
+    src: opnform-backup.sh.j2
+    dest: /usr/local/sbin/opnform-backup
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the OpnForm backup verification command
+  ansible.builtin.template:
+    src: opnform-backup-check.sh.j2
+    dest: /usr/local/sbin/opnform-backup-check
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the OpnForm snapshot restore command
+  ansible.builtin.template:
+    src: opnform-restore-snapshot.sh.j2
+    dest: /usr/local/sbin/opnform-restore-snapshot
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the OpnForm backup service
+  ansible.builtin.template:
+    src: opnform-backup.service.j2
+    dest: /etc/systemd/system/opnform-backup.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restic_backup reload systemd
+
+- name: Install the OpnForm backup timer
+  ansible.builtin.template:
+    src: opnform-backup.timer.j2
+    dest: /etc/systemd/system/opnform-backup.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restic_backup reload systemd
+
+- name: Enable the OpnForm backup timer
+  ansible.builtin.systemd:
+    name: opnform-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true

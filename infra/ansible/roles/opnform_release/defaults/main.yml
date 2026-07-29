@@ -1,0 +1,9 @@
+---
+opnform_project_dir: /opt/opnform
+opnform_release_dir: /opt/opnform/releases
+opnform_compose_file: /opt/opnform/current/docker-compose.yml
+opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
+opnform_caddy_config_path: /etc/caddy/Caddyfile
+opnform_caddy_service_name: caddy
+opnform_release_id: ''
+opnform_rollback_release: ''

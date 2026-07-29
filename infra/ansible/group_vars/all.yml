@@ -1,0 +1,29 @@
+---
+opnform_project_dir: /opt/opnform
+opnform_project_name: opnform
+opnform_release_dir: /opt/opnform/releases
+opnform_backup_dir: /opt/opnform/backups
+opnform_restore_dir: /var/lib/opnform-restore
+opnform_compose_file: /opt/opnform/docker-compose.yml
+opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
+opnform_caddy_config_path: /etc/caddy/Caddyfile
+opnform_caddy_service_name: caddy
+opnform_caddy_snippet_dir: /etc/caddy/conf.d
+opnform_caddy_package_version: ''
+opnform_cloudflare_proxied: true
+opnform_caddy_origin_lockdown: true
+opnform_docker_subnet: 172.30.40.0/24
+opnform_ingress_ip: 172.30.40.10
+opnform_ssh_port: 22
+opnform_ssh_allowed_cidrs: ''
+opnform_backup_schedule: '*-*-* 02:15:00'
+opnform_backup_keep_daily: 7
+opnform_backup_keep_weekly: 4
+opnform_backup_keep_monthly: 6
+opnform_release_id: "{{ lookup('ansible.builtin.env', 'RELEASE_ID', default='') }}"
+opnform_api_image: "{{ lookup('ansible.builtin.env', 'OPNFORM_API_IMAGE', default='') }}"
+opnform_client_image: "{{ lookup('ansible.builtin.env', 'OPNFORM_CLIENT_IMAGE', default='') }}"
+opnform_postgres_image: "{{ lookup('ansible.builtin.env', 'OPNFORM_POSTGRES_IMAGE', default='') }}"
+opnform_redis_image: "{{ lookup('ansible.builtin.env', 'OPNFORM_REDIS_IMAGE', default='') }}"
+opnform_nginx_image: "{{ lookup('ansible.builtin.env', 'OPNFORM_NGINX_IMAGE', default='') }}"
+opnform_rollback_release: ''

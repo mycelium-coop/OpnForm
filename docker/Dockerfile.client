@@ -41,6 +41,15 @@ RUN --mount=type=tmpfs,target=/tmp \
 
 FROM node:24-alpine
 WORKDIR /app
+ARG APP_VERSION=unknown
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="OpnForm Client" \
+      org.opencontainers.image.source="https://github.com/OpnForm/OpnForm" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+ENV APP_VERSION_DOCKER=$APP_VERSION
 COPY --from=javascript-builder /app/.output/ /app/
 RUN ls /app/
 

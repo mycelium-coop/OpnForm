@@ -1,0 +1,9 @@
+---
+opnform_project_dir: /opt/opnform
+opnform_project_name: opnform
+opnform_compose_file: /opt/opnform/current/docker-compose.yml
+opnform_backup_dir: /opt/opnform/backups
+opnform_backup_schedule: '*-*-* 02:15:00'
+opnform_backup_keep_daily: 7
+opnform_backup_keep_weekly: 4
+opnform_backup_keep_monthly: 6

@@ -21,3 +21,18 @@ client/.env.*
 !.env.example
 !api/.env.example
 !client/.env.example
+
+# Production infrastructure artifacts and generated inventories
+/.deploy/
+/infra/ansible/inventories/production/hosts.yml
+/infra/ansible/inventories/production/group_vars/all/generated.yml
+/infra/opentofu/**/.terraform/
+/infra/opentofu/**/*.tfstate
+/infra/opentofu/**/*.tfstate.*
+/infra/opentofu/**/*.tfplan
+/infra/opentofu/**/backend.hcl
+/infra/opentofu/**/state-snapshots/
+/infra/ansible/*.retry
+/infra/ansible/.cache/
+/infra/ansible/.collections/
+/infra/ansible/.venv/

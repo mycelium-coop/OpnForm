@@ -1,0 +1,242 @@
+---
+- name: Bootstrap a new OpnForm instance
+  when: opnform_first_deploy | default(false) | bool
+  block:
+    - name: Wait for the private OpnForm health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/healthcheck
+        status_code: 200
+      register: opnform_bootstrap_health
+      retries: 30
+      delay: 5
+      until: opnform_bootstrap_health.status == 200
+
+    - name: Create the initial OpnForm administrator
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/register
+        method: POST
+        body_format: json
+        body:
+          name: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_ADMIN_NAME') }}"
+          email: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_ADMIN_EMAIL') }}"
+          password: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_ADMIN_PASSWORD') }}"
+          password_confirmation: "{{ lookup('ansible.builtin.env', 'BOOTSTRAP_ADMIN_PASSWORD') }}"
+          hear_about_us: infrastructure-automation
+        status_code: 200
+      register: opnform_bootstrap_registration
+      no_log: true
+      diff: false
+
+    - name: Set the initial administrator token
+      ansible.builtin.set_fact:
+        opnform_bootstrap_token: "{{ opnform_bootstrap_registration.json.token }}"
+      no_log: true
+
+    - name: Create a least-privilege OIDC automation token
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/settings/tokens
+        method: POST
+        headers:
+          Authorization: "Bearer {{ opnform_bootstrap_token }}"
+        body_format: json
+        body:
+          name: infrastructure-oidc-automation
+          abilities:
+            - workspaces-read
+            - workspaces-write
+        status_code: 200
+      register: opnform_bootstrap_automation_token
+      no_log: true
+      diff: false
+
+    - name: Store the OIDC automation token on the VPS
+      ansible.builtin.copy:
+        dest: /opt/opnform/secrets/oidc-automation-token
+        content: "{{ opnform_bootstrap_automation_token.json.token }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Get the initial administrator workspace
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/open/workspaces/
+        headers:
+          Authorization: "Bearer {{ opnform_bootstrap_token }}"
+        status_code: 200
+      register: opnform_bootstrap_workspaces
+      no_log: true
+
+    - name: Set the initial workspace ID
+      ansible.builtin.set_fact:
+        opnform_bootstrap_workspace_id: "{{ opnform_bootstrap_workspaces.json.data[0].id }}"
+      no_log: true
+
+    - name: Configure the initial OIDC connection
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/open/workspaces/{{ opnform_bootstrap_workspace_id }}/oidc-connections/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ opnform_bootstrap_token }}"
+        body_format: json
+        body:
+          name: "{{ lookup('ansible.builtin.env', 'OIDC_NAME') }}"
+          slug: "{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}"
+          domain: "{{ lookup('ansible.builtin.env', 'OIDC_DOMAIN') }}"
+          issuer: "{{ lookup('ansible.builtin.env', 'OIDC_ISSUER') }}"
+          client_id: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_ID') }}"
+          client_secret: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_SECRET') }}"
+          scopes: "{{ lookup('ansible.builtin.env', 'OIDC_SCOPES_JSON') | from_json }}"
+          options:
+            require_state: "{{ lookup('ansible.builtin.env', 'OIDC_REQUIRE_STATE') | bool }}"
+            field_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_FIELD_MAPPINGS_JSON') | from_json }}"
+            group_role_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_GROUP_ROLE_MAPPINGS_JSON') | from_json }}"
+          redirect_path: "https://{{ opnform_hostname }}/auth/{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}/callback"
+          enabled: true
+        status_code: 201
+      no_log: true
+      diff: false
+      when: lookup('ansible.builtin.env', 'OIDC_ENABLED') | bool
+
+    - name: Render the public Caddy configuration after bootstrap
+      ansible.builtin.template:
+        src: maintenance.caddy.j2
+        dest: "{{ opnform_maintenance_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        opnform_maintenance_enabled: false
+
+    - name: Validate the public Caddy configuration after bootstrap
+      ansible.builtin.command:
+        argv:
+          - caddy
+          - validate
+          - --config
+          - "{{ opnform_caddy_config_path }}"
+          - --adapter
+          - caddyfile
+      changed_when: false
+
+    - name: Reload Caddy after bootstrap
+      ansible.builtin.service:
+        name: "{{ opnform_caddy_service_name }}"
+        state: reloaded
+
+- name: Reconcile OIDC configuration on an existing OpnForm instance
+  when:
+    - not (opnform_first_deploy | default(false) | bool)
+    - lookup('ansible.builtin.env', 'OIDC_ENABLED') | bool
+  block:
+    - name: Check for the persisted OIDC automation token
+      ansible.builtin.stat:
+        path: /opt/opnform/secrets/oidc-automation-token
+      register: opnform_oidc_automation_token_stat
+
+    - name: Require the persisted OIDC automation token
+      ansible.builtin.assert:
+        that:
+          - opnform_oidc_automation_token_stat.stat.exists
+        fail_msg: The OIDC automation token is missing; bootstrap the instance before reconciling OIDC settings.
+
+    - name: Read the persisted OIDC automation token
+      ansible.builtin.slurp:
+        src: /opt/opnform/secrets/oidc-automation-token
+      register: opnform_oidc_automation_token_file
+      no_log: true
+
+    - name: Set the OIDC automation token
+      ansible.builtin.set_fact:
+        opnform_oidc_automation_token: "{{ opnform_oidc_automation_token_file.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Get the administrator workspace through the automation token
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/open/workspaces/
+        headers:
+          Authorization: "Bearer {{ opnform_oidc_automation_token }}"
+        status_code: 200
+      register: opnform_existing_workspaces
+      no_log: true
+
+    - name: Set the existing workspace ID
+      ansible.builtin.set_fact:
+        opnform_existing_workspace_id: "{{ opnform_existing_workspaces.json.data[0].id }}"
+      no_log: true
+
+    - name: Get the existing workspace OIDC connection
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/open/workspaces/{{ opnform_existing_workspace_id }}/oidc-connections/"
+        headers:
+          Authorization: "Bearer {{ opnform_oidc_automation_token }}"
+        status_code: 200
+      register: opnform_existing_oidc_connections
+      no_log: true
+
+    - name: Set the existing workspace OIDC connection
+      ansible.builtin.set_fact:
+        opnform_existing_oidc_connection: >-
+          {{
+            (
+              opnform_existing_oidc_connections.json
+              | selectattr('workspace_id', 'equalto', opnform_existing_workspace_id)
+              | list
+              | first
+            )
+            | default({}, true)
+          }}
+      no_log: true
+
+    - name: Update the existing OIDC connection
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/open/workspaces/{{ opnform_existing_workspace_id }}/oidc-connections/{{ opnform_existing_oidc_connection.id }}"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ opnform_oidc_automation_token }}"
+        body_format: json
+        body:
+          name: "{{ lookup('ansible.builtin.env', 'OIDC_NAME') }}"
+          slug: "{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}"
+          domain: "{{ lookup('ansible.builtin.env', 'OIDC_DOMAIN') }}"
+          issuer: "{{ lookup('ansible.builtin.env', 'OIDC_ISSUER') }}"
+          client_id: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_ID') }}"
+          client_secret: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_SECRET') }}"
+          scopes: "{{ lookup('ansible.builtin.env', 'OIDC_SCOPES_JSON') | from_json }}"
+          options:
+            require_state: "{{ lookup('ansible.builtin.env', 'OIDC_REQUIRE_STATE') | bool }}"
+            field_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_FIELD_MAPPINGS_JSON') | from_json }}"
+            group_role_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_GROUP_ROLE_MAPPINGS_JSON') | from_json }}"
+          redirect_path: "https://{{ opnform_hostname }}/auth/{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}/callback"
+          enabled: true
+        status_code: 200
+      no_log: true
+      diff: false
+      when: opnform_existing_oidc_connection | length > 0
+
+    - name: Create a missing OIDC connection
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/open/workspaces/{{ opnform_existing_workspace_id }}/oidc-connections/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ opnform_oidc_automation_token }}"
+        body_format: json
+        body:
+          name: "{{ lookup('ansible.builtin.env', 'OIDC_NAME') }}"
+          slug: "{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}"
+          domain: "{{ lookup('ansible.builtin.env', 'OIDC_DOMAIN') }}"
+          issuer: "{{ lookup('ansible.builtin.env', 'OIDC_ISSUER') }}"
+          client_id: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_ID') }}"
+          client_secret: "{{ lookup('ansible.builtin.env', 'OIDC_CLIENT_SECRET') }}"
+          scopes: "{{ lookup('ansible.builtin.env', 'OIDC_SCOPES_JSON') | from_json }}"
+          options:
+            require_state: "{{ lookup('ansible.builtin.env', 'OIDC_REQUIRE_STATE') | bool }}"
+            field_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_FIELD_MAPPINGS_JSON') | from_json }}"
+            group_role_mappings: "{{ lookup('ansible.builtin.env', 'OIDC_GROUP_ROLE_MAPPINGS_JSON') | from_json }}"
+          redirect_path: "https://{{ opnform_hostname }}/auth/{{ lookup('ansible.builtin.env', 'OIDC_SLUG') }}/callback"
+          enabled: true
+        status_code: 201
+      no_log: true
+      diff: false
+      when: opnform_existing_oidc_connection | length == 0

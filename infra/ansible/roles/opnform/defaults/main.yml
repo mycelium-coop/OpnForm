@@ -1,0 +1,15 @@
+---
+opnform_project_dir: /opt/opnform
+opnform_project_name: opnform
+opnform_release_dir: /opt/opnform/releases
+opnform_backup_dir: /opt/opnform/backups
+opnform_compose_file: /opt/opnform/current/docker-compose.yml
+opnform_release_id: ''
+opnform_api_image: ''
+opnform_client_image: ''
+opnform_postgres_image: ''
+opnform_redis_image: ''
+opnform_nginx_image: ''
+opnform_hostname: ''
+opnform_ingress_ip: 172.30.40.10
+opnform_docker_subnet: 172.30.40.0/24

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+snapshot_id="${1:-}"
+[[ "${snapshot_id}" =~ ^([0-9a-f]{8,64}|latest)$ ]] || { printf '%s\n' 'A valid restic snapshot ID is required.' >&2; exit 1; }
+
+while IFS= read -r line || [[ -n "${line}" ]]; do
+  case "${line}" in
+    ''|'#'*) continue ;;
+    *=*) export "${line}" ;;
+    *) printf 'Invalid backup environment line.\n' >&2; exit 1 ;;
+  esac
+done < /opt/opnform/secrets/backup.env
+
+restore_root="/var/lib/opnform-restore/${snapshot_id}"
+rm -rf -- "${restore_root}"
+mkdir -p "${restore_root}"
+restic restore "${snapshot_id}" --target "${restore_root}" >/dev/null
+
+dump_path="${restore_root}${OPNFORM_BACKUP_DIR}/opnform.sqlc"
+storage_mount="$(docker volume inspect "${OPNFORM_PROJECT_NAME}_opnform_storage" --format '{% raw %}{{ .Mountpoint }}{% endraw %}')"
+storage_restore="${restore_root}${storage_mount}"
+[[ -f "${dump_path}" && -d "${storage_restore}" ]] || { printf '%s\n' 'Snapshot is missing its database dump or uploads volume.' >&2; exit 1; }
+
+docker compose -f "${OPNFORM_COMPOSE_FILE}" stop --timeout 60 ingress ui api-worker api-scheduler api
+docker compose -f "${OPNFORM_COMPOSE_FILE}" up -d --wait --wait-timeout 300 db redis
+docker compose -f "${OPNFORM_COMPOSE_FILE}" cp "${dump_path}" db:/tmp/opnform.sqlc
+docker compose -f "${OPNFORM_COMPOSE_FILE}" exec -T db pg_restore --clean --if-exists -U "${DB_USERNAME}" -d "${DB_DATABASE}" /tmp/opnform.sqlc
+rsync -a --delete "${storage_restore}/" "${storage_mount}/"
+docker compose -f "${OPNFORM_COMPOSE_FILE}" up -d --wait --wait-timeout 300
+rm -rf -- "${restore_root}"
