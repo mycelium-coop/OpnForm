@@ -7,7 +7,7 @@ and immutable application releases.
 
 ## Prerequisites
 
-- OpenTofu 1.11.x, Docker with Buildx, `just`, `op`, `restic`, `jq`, and `uv`.
+- OpenTofu 1.12.5, Docker with Buildx, `just`, `op`, `restic`, `jq`, and `uv`.
   Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.

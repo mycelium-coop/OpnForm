@@ -29,8 +29,8 @@ for collection_path in ansible/posix community/docker community/general; do
 done
 
 tofu_version="$(tofu version -json | jq -r '.terraform_version')"
-if [[ "${tofu_version}" != 1.11.* ]]; then
-  printf 'OpenTofu 1.11.x is required; found %s.\n' "${tofu_version}" >&2
+if [[ "${tofu_version}" != "1.12.5" ]]; then
+  printf 'OpenTofu 1.12.5 is required; found %s.\n' "${tofu_version}" >&2
   exit 1
 fi
 
