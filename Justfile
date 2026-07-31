@@ -9,7 +9,7 @@ default:
 doctor:
     @scripts/infra/doctor.sh
 
-# Render .env from the tech-admin/opnform-secrets 1Password item.
+# Render .env from the tech-admin/opnform-secrets 1Password item (warns on missing fields).
 env:
     @scripts/infra/render-env.sh
 
@@ -26,9 +26,13 @@ python-sync:
 python-lock:
     @uv lock --project infra/ansible
 
-# Initialise the local bootstrap stack that creates the R2 buckets.
+# Initialise the bootstrap stack with local state before creating the R2 buckets.
 bootstrap-init:
-    @scripts/infra/tofu.sh bootstrap init
+    @scripts/infra/tofu.sh bootstrap init-local
+
+# Initialise bootstrap state from R2 in a fresh checkout after migration.
+bootstrap-remote-init:
+    @scripts/infra/tofu.sh bootstrap init-remote
 
 # Create and review the R2 bootstrap plan.
 bootstrap-plan:
@@ -42,16 +46,18 @@ bootstrap-show:
 bootstrap-apply:
     @scripts/infra/tofu.sh bootstrap apply
 
-# Migrate bootstrap state from local storage into the newly-created R2 bucket.
+# Back up and migrate bootstrap state from local storage into the new R2 bucket.
 bootstrap-migrate:
     @scripts/infra/tofu.sh bootstrap migrate
 
 # Check OpenTofu formatting.
 fmt-check:
+    @scripts/infra/tofu.sh bootstrap fmt-check
     @scripts/infra/tofu.sh production fmt-check
 
 # Validate all OpenTofu configurations.
 validate:
+    @scripts/infra/tofu.sh bootstrap validate
     @scripts/infra/tofu.sh production validate
 
 # Run static OpenTofu security checks when installed.
