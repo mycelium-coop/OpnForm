@@ -80,6 +80,10 @@ Instructions for AI coding agents working in this repository.
 - Do not commit secrets or tokens.
 - Do not change licensing files or enterprise-only code boundaries unless explicitly requested.
 
+## Commit Messages
+
+- Never add a `Co-Authored-By: Claude ...` (or similar AI attribution) trailer to commit messages.
+
 ## Cursor Cloud specific instructions
 
 ### Project overview
