@@ -3,3 +3,4 @@ opnform_deploy_user: opnform
 opnform_ssh_port: 22
 opnform_ssh_allowed_cidrs: ''
 opnform_manage_firewall: "{{ lookup('ansible.builtin.env', 'VPS_MODE', default='existing') == 'create' }}"
+opnform_console_password: "{{ lookup('ansible.builtin.env', 'OVH_SSH_PASSWORD', default='') }}"

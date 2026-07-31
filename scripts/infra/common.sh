@@ -53,6 +53,77 @@ require_command() {
   fi
 }
 
+# Create ovh-ssh-password in tech-admin/opnform-secrets when missing.
+# Existing values are left unchanged so break-glass credentials stay stable.
+ensure_ovh_ssh_password() {
+  local vault="tech-admin"
+  local item="opnform-secrets"
+  local field="ovh-ssh-password"
+  local ref="op://${vault}/${item}/${field}"
+  local password template
+
+  require_command op
+  require_command openssl
+  require_command jq
+
+  if op read "${ref}" --no-newline >/dev/null 2>&1; then
+    return 0
+  fi
+
+  password="$(openssl rand -base64 48 | tr -d '\n')"
+  template="$(mktemp)"
+  chmod 600 "${template}"
+
+  if ! op item get "${item}" --vault "${vault}" --format=json \
+    | jq --arg label "${field}" --arg value "${password}" '
+        .fields += [{
+          "type": "CONCEALED",
+          "label": $label,
+          "value": $value
+        }]
+      ' >"${template}"; then
+    rm -f "${template}"
+    printf 'Failed to prepare the %s field for 1Password item %s/%s.\n' \
+      "${field}" "${vault}" "${item}" >&2
+    exit 1
+  fi
+
+  if ! op item edit "${item}" --vault "${vault}" --template="${template}" >/dev/null; then
+    rm -f "${template}"
+    printf 'Failed to store %s in 1Password item %s/%s.\n' \
+      "${field}" "${vault}" "${item}" >&2
+    exit 1
+  fi
+
+  rm -f "${template}"
+  unset password
+  printf 'Created %s in 1Password item %s/%s.\n' "${field}" "${vault}" "${item}"
+}
+
+# Ensure OVH_SSH_PASSWORD is present in the local .env and exported.
+# Reuses a value already loaded from .env so deploy/check work offline when the
+# secret is already local. Uses 1Password only for the legacy backfill path.
+sync_ovh_ssh_password_env() {
+  local root env_file password
+
+  if [[ -n "${OVH_SSH_PASSWORD:-}" ]]; then
+    return 0
+  fi
+
+  ensure_ovh_ssh_password
+  root="$(infra_root)"
+  env_file="${root}/.env"
+  password="$(op read 'op://tech-admin/opnform-secrets/ovh-ssh-password' --no-newline)"
+
+  if [[ -f "${env_file}" ]] && ! grep -q '^OVH_SSH_PASSWORD=' "${env_file}"; then
+    printf 'OVH_SSH_PASSWORD=%s\n' "${password}" >>"${env_file}"
+    chmod 600 "${env_file}"
+    printf 'Appended OVH_SSH_PASSWORD to %s.\n' "${env_file}"
+  fi
+
+  export OVH_SSH_PASSWORD="${password}"
+}
+
 confirm_production() {
   require_value DEPLOYMENT_NAME
   if [[ "${CONFIRM_PROD:-}" != "${DEPLOYMENT_NAME}" ]]; then

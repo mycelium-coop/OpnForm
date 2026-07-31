@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - ansible_facts.os_family == 'Debian'
-    fail_msg: OpnForm automation supports Debian 12/13 and Ubuntu 24.04 only.
+    fail_msg: OpnForm automation supports Debian 12/13 and Ubuntu 24.04/26.04 only.
 
 - name: Update APT package metadata
   ansible.builtin.apt:
@@ -22,6 +22,14 @@
       - rsync
     state: present
 
+- name: Require the KVM break-glass console password
+  ansible.builtin.assert:
+    that:
+      - opnform_console_password | length > 0
+    fail_msg: >-
+      OVH_SSH_PASSWORD is required. Run `just env` (or redeploy) so the
+      ovh-ssh-password field exists in tech-admin/opnform-secrets.
+
 - name: Create the deployment user
   ansible.builtin.user:
     name: "{{ opnform_deploy_user }}"
@@ -30,6 +38,14 @@
     append: true
     create_home: true
     state: present
+
+- name: Set the KVM break-glass password on administrative users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    password: "{{ opnform_console_password | password_hash('sha512', (inventory_hostname | hash('sha1'))[:16]) }}"
+    update_password: always
+  loop: "{{ [opnform_deploy_user, ansible_user] | unique }}"
+  no_log: true
 
 - name: Install the deployment SSH public key
   ansible.posix.authorized_key:

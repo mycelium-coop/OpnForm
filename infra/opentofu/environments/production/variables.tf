@@ -60,7 +60,7 @@ variable "vps_datacenter" {
 variable "vps_os" {
   description = "OS catalog value selected in create mode."
   type        = string
-  default     = "Debian 13"
+  default     = "Ubuntu 26.04"
 }
 
 variable "vps_image_id" {

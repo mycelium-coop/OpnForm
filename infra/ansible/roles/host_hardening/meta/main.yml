@@ -7,5 +7,5 @@ galaxy_info:
     - name: Debian
       versions: [bookworm, trixie]
     - name: Ubuntu
-      versions: [noble]
+      versions: [noble, resolute]
 dependencies: []
