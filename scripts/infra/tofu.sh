@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 usage() {
-  printf 'Usage: %s <bootstrap|production> <init|fmt-check|validate|plan|show|apply|snapshot|migrate>\n' "$0" >&2
+  printf 'Usage: %s <bootstrap|production> <init|init-local|init-remote|fmt-check|validate|plan|show|apply|snapshot|migrate>\n' "$0" >&2
   exit 1
 }
 
@@ -47,7 +47,14 @@ else
   export TF_VAR_cloudflare_manage_ssl_setting="${CLOUDFLARE_MANAGE_SSL_SETTING}"
 fi
 
-if [[ "${stack}" == "production" || "${action}" == "migrate" ]]; then
+backend_file="${directory}/backend.hcl"
+bootstrap_backend_declaration="${root}/infra/opentofu/bootstrap/backend.generated.tf"
+bootstrap_backend_mode_file="${root}/infra/opentofu/bootstrap/.backend-mode"
+
+prepare_r2_backend() {
+  local backend_key
+  require_value R2_ACCOUNT_ID
+  require_value R2_STATE_BUCKET
   require_value R2_STATE_ACCESS_KEY_ID
   require_value R2_STATE_SECRET_ACCESS_KEY
   export AWS_ACCESS_KEY_ID="${R2_STATE_ACCESS_KEY_ID}"
@@ -58,7 +65,6 @@ if [[ "${stack}" == "production" || "${action}" == "migrate" ]]; then
   else
     backend_key="opnform/${DEPLOYMENT_NAME}/production.tfstate"
   fi
-  backend_file="${directory}/backend.hcl"
   umask 077
   cat >"${backend_file}" <<EOF
 bucket = "${R2_STATE_BUCKET}"
@@ -72,25 +78,135 @@ skip_requesting_account_id = true
 encrypt = true
 use_lockfile = true
 EOF
-fi
+}
+
+bootstrap_backend_mode() {
+  if [[ -f "${bootstrap_backend_mode_file}" ]]; then
+    tr -d '\r\n' <"${bootstrap_backend_mode_file}"
+  fi
+}
+
+set_bootstrap_backend_mode() {
+  local mode="$1"
+  umask 077
+  printf '%s\n' "${mode}" >"${bootstrap_backend_mode_file}"
+}
+
+write_bootstrap_remote_backend() {
+  umask 077
+  cat >"${bootstrap_backend_declaration}" <<'EOF'
+terraform {
+  backend "s3" {}
+}
+EOF
+}
+
+verify_bootstrap_state() {
+  local addresses
+  if ! addresses="$(tofu -chdir="${directory}" state list)"; then
+    return 1
+  fi
+  grep -Fxq 'cloudflare_r2_bucket.state' <<<"${addresses}" &&
+    grep -Fxq 'cloudflare_r2_bucket.backup' <<<"${addresses}"
+}
+
+verify_local_bootstrap_state_file() {
+  local state_file="$1"
+  require_command jq
+  jq -e '
+    [
+      .resources[]?
+      | select(.type == "cloudflare_r2_bucket" and (.instances | length) > 0)
+      | .name
+    ]
+    | index("state") != null and index("backup") != null
+  ' "${state_file}" >/dev/null
+}
+
+initialize_bootstrap_local() {
+  local mode
+  mode="$(bootstrap_backend_mode)"
+  if [[ "${mode}" == "r2" || -f "${bootstrap_backend_declaration}" ]]; then
+    printf '%s\n' 'Bootstrap is already configured for R2. Run `just bootstrap-plan`, or use `just bootstrap-remote-init` in a fresh checkout.' >&2
+    exit 1
+  fi
+  tofu -chdir="${directory}" init
+  set_bootstrap_backend_mode local
+  printf '%s\n' 'Bootstrap is initialized with local state. Migrate it with `just bootstrap-migrate` after applying the reviewed bootstrap plan.'
+}
+
+initialize_bootstrap_remote() {
+  local mode local_state
+  mode="$(bootstrap_backend_mode)"
+  local_state="${directory}/terraform.tfstate"
+  if [[ "${mode}" == "local" || -s "${local_state}" ]]; then
+    printf '%s\n' 'Local bootstrap state exists or is selected. Use `just bootstrap-migrate` instead of remote initialization.' >&2
+    exit 1
+  fi
+  prepare_r2_backend
+  write_bootstrap_remote_backend
+  tofu -chdir="${directory}" init -reconfigure -backend-config="${backend_file}"
+  if ! verify_bootstrap_state; then
+    printf '%s\n' 'The selected R2 backend does not contain both bootstrap bucket resources. Check DEPLOYMENT_NAME and R2 backend settings before planning.' >&2
+    exit 1
+  fi
+  set_bootstrap_backend_mode r2
+  printf '%s\n' 'Bootstrap is initialized from verified R2 state.'
+}
+
+ensure_bootstrap_initialized() {
+  local mode
+  mode="$(bootstrap_backend_mode)"
+  case "${mode}" in
+    local)
+      if [[ -f "${bootstrap_backend_declaration}" ]]; then
+        printf '%s\n' 'Bootstrap migration is incomplete: the R2 backend declaration exists while local mode is selected. Re-run `just bootstrap-migrate`.' >&2
+        exit 1
+      fi
+      tofu -chdir="${directory}" init
+      ;;
+    r2)
+      prepare_r2_backend
+      write_bootstrap_remote_backend
+      tofu -chdir="${directory}" init -backend-config="${backend_file}"
+      ;;
+    *)
+      printf '%s\n' 'Bootstrap backend is not selected. Run `just bootstrap-init` for the first bootstrap, or `just bootstrap-remote-init` when state already exists in R2.' >&2
+      exit 1
+      ;;
+  esac
+}
+
+initialize_production_backend() {
+  prepare_r2_backend
+  tofu -chdir="${directory}" init -backend-config="${backend_file}"
+}
 
 case "${action}" in
   init)
-    if [[ "${stack}" == "production" ]]; then
-      tofu -chdir="${directory}" init -backend-config="${backend_file}"
-    else
-      tofu -chdir="${directory}" init -backend=false
-    fi
+    [[ "${stack}" == "production" ]] || usage
+    initialize_production_backend
+    ;;
+  init-local)
+    [[ "${stack}" == "bootstrap" ]] || usage
+    initialize_bootstrap_local
+    ;;
+  init-remote)
+    [[ "${stack}" == "bootstrap" ]] || usage
+    initialize_bootstrap_remote
     ;;
   fmt-check)
     tofu fmt -check -recursive "${directory}"
     ;;
   validate)
+    tofu -chdir="${directory}" init -backend=false
     tofu -chdir="${directory}" validate
     ;;
   plan)
-    [[ -d "${directory}/.terraform" ]] || "$0" "${stack}" init
-    if [[ "${stack}" == "production" ]]; then
+    if [[ "${stack}" == "bootstrap" ]]; then
+      ensure_bootstrap_initialized
+    else
+      initialize_production_backend
       "$0" "${stack}" snapshot
     fi
     rm -f "${plan_file}"
@@ -138,14 +254,37 @@ case "${action}" in
   migrate)
     [[ "${stack}" == "bootstrap" ]] || { printf '%s\n' 'Only the bootstrap stack needs state migration.' >&2; exit 1; }
     confirm_production
+    if [[ "$(bootstrap_backend_mode)" != "local" ]]; then
+      printf '%s\n' 'Bootstrap local mode is not selected. Run `just bootstrap-init` before the first bootstrap, or use R2 initialization for an existing deployment.' >&2
+      exit 1
+    fi
+    local_state="${directory}/terraform.tfstate"
+    if [[ ! -s "${local_state}" ]] || ! verify_local_bootstrap_state_file "${local_state}"; then
+      printf '%s\n' 'Local bootstrap state does not contain both R2 bucket resources. Apply the reviewed bootstrap plan before migrating.' >&2
+      exit 1
+    fi
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    local_state_backup="${local_state}.pre-migration-${timestamp}"
+    cp -p "${local_state}" "${local_state_backup}"
+    chmod 0600 "${local_state_backup}"
+    prepare_r2_backend
+    write_bootstrap_remote_backend
     tofu -chdir="${directory}" init -migrate-state -force-copy -backend-config="${backend_file}"
-    tofu -chdir="${directory}" state pull >/dev/null
+    if ! verify_bootstrap_state; then
+      printf 'R2 migration completed but remote verification failed. Keep %s and investigate before planning or applying.\n' "${local_state_backup}" >&2
+      exit 1
+    fi
+    set_bootstrap_backend_mode r2
     find "${directory}" -maxdepth 1 -type f \( -name 'terraform.tfstate' -o -name 'terraform.tfstate.backup' \) -delete
-    printf '%s\n' 'Bootstrap state is now stored in R2; local bootstrap state files were removed.'
+    rm -f "${plan_file}"
+    printf 'Bootstrap state is verified in R2. Pre-migration state backup retained at %s.\n' "${local_state_backup}"
     ;;
   apply)
     confirm_production
     [[ -f "${plan_file}" ]] || { printf 'No saved reviewed plan: %s\n' "${plan_file}" >&2; exit 1; }
+    if [[ "${stack}" == "bootstrap" ]]; then
+      ensure_bootstrap_initialized
+    fi
     tofu -chdir="${directory}" apply -lock-timeout=5m "${plan_file}"
     ;;
   *)

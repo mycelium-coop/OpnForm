@@ -38,9 +38,11 @@ Accounts and resources:
   payment method, and Cloudflare R2 enabled on the same account.
 - A private GHCR package namespace for the API and client images.
 - A 1Password item named `opnform-secrets` in the `tech-admin` vault. Create
-  every field listed in [Secrets checklist](#secrets-checklist) before rendering
-  `.env`, except `ovh-ssh-password`, which `just env` / deploy create when
-  missing. Field names must match the last segment of each
+  the fields you need for the current stage (see
+  [Secrets checklist](#secrets-checklist)); `just env` warns about missing
+  fields and leaves those variables empty instead of failing. Exception:
+  `ovh-ssh-password`, which `just env` / deploy create when missing. Field
+  names must match the last segment of each
   `op://tech-admin/opnform-secrets/<field>` reference in the repository-root
   `.env.example`.
 
@@ -76,15 +78,15 @@ syncing or deploying; `uv run --locked` refuses to operate with a stale lockfile
 
 `just env` runs `op inject` against `.env.example` and writes an ignored root
 `.env` with mode `0600`. Sign in to 1Password first (`op signin`), then create
-or update the `tech-admin` / `opnform-secrets` item so every referenced field
-exists. Prefer one Login or Secure Note item with custom fields named exactly
-as below.
+or update the `tech-admin` / `opnform-secrets` item with the fields needed for
+your current stage. Prefer one Login or Secure Note item with custom fields
+named exactly as below. Missing fields are left empty and listed as warnings so
+early steps such as R2 bootstrap can proceed without every deploy-time secret.
 
-After the item is complete:
+After the item has at least the secrets for the next step:
 
 ```sh
 just env
-chmod 600 .env
 ```
 
 `just env` refuses to overwrite an existing `.env`. To re-render:
@@ -92,8 +94,10 @@ chmod 600 .env
 ```sh
 CONFIRM_ENV_CLEAN="$PWD/.env" just env-clean
 just env
-chmod 600 .env
 ```
+
+`just env` sets the generated `.env` mode to `0600` automatically. Run
+`chmod 600 .env` only if you create or replace `.env` outside `just env`.
 
 `CONFIRM_ENV_CLEAN` must be the absolute path to the repo `.env`, not the
 deployment name. Non-secret defaults in the generated file may be edited
@@ -177,8 +181,9 @@ for OpnForm.
 **R2 S3 API token permissions and timing**
 
 `bootstrap-init` through `bootstrap-apply` need only the Cloudflare API token.
-R2 S3 credentials are required starting at `bootstrap-migrate` and for every
-production OpenTofu/restic operation.
+R2 S3 credentials are required starting at `bootstrap-migrate`, for
+`bootstrap-remote-init` in subsequent checkouts, and for every production
+OpenTofu/restic operation.
 
 Bucket-scoped tokens cannot be created until the buckets exist. Use one of
 these approaches:
@@ -399,26 +404,50 @@ administrator account for an existing VPS. The automation creates the separate
 
 ### OpenTofu bootstrap and production
 
-Create the remote state and backup buckets, then migrate the production state
-to R2:
+For the first deployment, initialize the bootstrap stack with local state,
+create the remote state and backup buckets from a reviewed plan, and then
+migrate the bootstrap state to R2:
 
 ```sh
 just bootstrap-init
 just bootstrap-plan
 just bootstrap-show
-CONFIRM_PROD=opnform-production just bootstrap-apply
-CONFIRM_PROD=opnform-production just bootstrap-migrate
+CONFIRM_PROD=opnform-prod just bootstrap-apply
+CONFIRM_PROD=opnform-prod just bootstrap-migrate
+just bootstrap-plan
+just bootstrap-show
 just init
 just plan
 just show-plan
-CONFIRM_PROD=opnform-production just apply
+CONFIRM_PROD=opnform-prod just apply
 ```
 
-Replace `opnform-production` with the `DEPLOYMENT_NAME` in `.env`. Do not apply
-without reviewing the saved plan. Every production plan first writes an
-encrypted R2 state snapshot. On the first plan, the state snapshot is skipped
-because no production state exists yet; the encrypted restic repository is
-initialized automatically before the first snapshot that has state to save.
+Replace `opnform-prod` with the `DEPLOYMENT_NAME` in `.env`. Do not apply
+without reviewing the saved plan. `bootstrap-init` explicitly selects the
+local backend because the R2 state bucket does not exist yet. `bootstrap-plan`
+refuses to guess a backend if you skip initialization. `bootstrap-migrate`
+backs up the local state, copies it to R2, verifies both bucket resources in
+the remote state, and retains the ignored `terraform.tfstate.pre-migration-*`
+backup under `infra/opentofu/bootstrap/` for recovery. The second bootstrap
+plan verifies that the migrated backend produces no unexpected changes. Keep
+the mode-`0600` backup until you have reviewed that plan; never commit it.
+
+After migration, the checkout records that bootstrap uses R2. In a fresh
+checkout or on another operator machine, initialize the existing bootstrap
+state before planning changes:
+
+```sh
+just bootstrap-remote-init
+just bootstrap-plan
+just bootstrap-show
+```
+
+Do not run `bootstrap-init` again for an existing deployment: it is only for
+the first local bootstrap. Use `bootstrap-remote-init` when the bootstrap state
+already exists in R2. Every production plan first writes an encrypted R2 state
+snapshot. On the first production plan, the state snapshot is skipped because
+no production state exists yet; the encrypted restic repository is initialized
+automatically before the first snapshot that has state to save.
 
 Useful outputs after apply:
 
@@ -456,7 +485,7 @@ Greenfield deployment needs a published digest-pinned release. Do not run bare
 From a **clean committed** worktree (dirty trees are refused):
 
 ```sh
-CONFIRM_PROD=opnform-production just release
+CONFIRM_PROD=opnform-prod just release
 ```
 
 That command:
@@ -473,7 +502,7 @@ Partial path if you want to separate publish from deploy:
 ```sh
 just release-check
 just publish
-CONFIRM_PROD=opnform-production just deploy-release sha-<40-character-commit>
+CONFIRM_PROD=opnform-prod just deploy-release sha-<40-character-commit>
 ```
 
 Local release manifests under `.deploy/releases/` are gitignored. Losing a
@@ -504,10 +533,10 @@ just logs
 just ssh
 just smoke
 just releases
-CONFIRM_PROD=opnform-production just backup
+CONFIRM_PROD=opnform-prod just backup
 just backup-check
-CONFIRM_PROD=opnform-production just rollback sha-<40-character-commit>
-CONFIRM_PROD=opnform-production just restore <restic-snapshot-id>
+CONFIRM_PROD=opnform-prod just rollback sha-<40-character-commit>
+CONFIRM_PROD=opnform-prod just restore <restic-snapshot-id>
 ```
 
 Optional validation helpers: `just fmt-check`, `just validate`,

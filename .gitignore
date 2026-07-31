@@ -31,6 +31,8 @@ client/.env.*
 /infra/opentofu/**/*.tfstate.*
 /infra/opentofu/**/*.tfplan
 /infra/opentofu/**/backend.hcl
+/infra/opentofu/bootstrap/.backend-mode
+/infra/opentofu/bootstrap/backend.generated.tf
 /infra/opentofu/**/state-snapshots/
 /infra/ansible/*.retry
 /infra/ansible/.cache/
