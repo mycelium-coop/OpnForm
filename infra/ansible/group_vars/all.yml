@@ -4,7 +4,7 @@ opnform_project_name: opnform
 opnform_release_dir: /opt/opnform/releases
 opnform_backup_dir: /opt/opnform/backups
 opnform_restore_dir: /var/lib/opnform-restore
-opnform_compose_file: /opt/opnform/docker-compose.yml
+opnform_compose_file: /opt/opnform/current/docker-compose.yml
 opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
 opnform_caddy_config_path: /etc/caddy/Caddyfile
 opnform_caddy_service_name: caddy

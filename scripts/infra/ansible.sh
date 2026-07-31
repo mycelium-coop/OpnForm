@@ -86,6 +86,7 @@ case "${action}" in
     ;;
   check)
     require_inventory
+    require_value OVH_SSH_PASSWORD
     playbook --check --diff site.yml
     ;;
   deploy)
@@ -94,6 +95,8 @@ case "${action}" in
     require_value RELEASE_ID
     require_value OPNFORM_API_IMAGE
     require_value OPNFORM_CLIENT_IMAGE
+    sync_ovh_ssh_password_env
+    require_value OVH_SSH_PASSWORD
     playbook site.yml
     ;;
   rollback)
@@ -108,11 +111,11 @@ case "${action}" in
     ;;
   status)
     require_inventory
-    ansible_command ansible opnform -b -m ansible.builtin.command -a 'docker compose -f /opt/opnform/docker-compose.yml ps'
+    ansible_command ansible opnform -b -m ansible.builtin.command -a 'docker compose -f /opt/opnform/current/docker-compose.yml ps'
     ;;
   logs)
     require_inventory
-    ansible_command ansible opnform -b -m ansible.builtin.command -a 'docker compose -f /opt/opnform/docker-compose.yml logs --tail=200'
+    ansible_command ansible opnform -b -m ansible.builtin.command -a 'docker compose -f /opt/opnform/current/docker-compose.yml logs --tail=200'
     ;;
   ssh)
     require_inventory
