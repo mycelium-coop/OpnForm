@@ -290,6 +290,10 @@ case "${action}" in
       if [[ "$(bootstrap_backend_mode)" == "local" ]]; then
         umask 077
       fi
+    else
+      # Plan initializes the backend and exports R2 state credentials; apply must
+      # export them again so the S3 backend can lock and refresh remote state.
+      prepare_r2_backend
     fi
     tofu -chdir="${directory}" apply -lock-timeout=5m "${plan_file}"
     if [[ "${stack}" == "bootstrap" && "$(bootstrap_backend_mode)" == "local" ]]; then
