@@ -118,9 +118,30 @@ state operations.
 | `ovh-application-secret` | OVH Application Secret (AS) | Shown once when the application is created. |
 | `ovh-consumer-key` | OVH Consumer Key (CK) | Issued with the token after you approve the requested rights. |
 | `ovh-subsidiary` | Billing subsidiary for new orders | Two-letter subsidiary code used by OVH cart orders, for example `FR`, `DE`, `IE`, `PL`, or `US`. Use the subsidiary of the OVH account that will be billed. |
-| `ovh-vps-plan-code` | VPS commercial plan | Required only for `VPS_MODE=create`. Discover codes with the OVH API console under `/order` / VPS catalog (for example `vps-2025-model*`), or copy the plan code from an order confirmation for the SKU you want. |
+| `ovh-vps-plan-code` | VPS commercial plan | Required only for `VPS_MODE=create`. Discover codes with the OVH API console under `/order` / VPS catalog (for example `vps-2025-model*` / `vps-2027-model*`), or copy the plan code from an order confirmation for the SKU you want. |
 | `ovh-vps-datacenter` | Datacenter label | Required only for create mode. Examples: `GRA`, `SBG`, `BHS`, `WAW`. Choose a datacenter where the selected plan is available. |
 | `ovh-vps-image-id` | OS image UUID | Required only for create mode so OpenTofu can inject the deploy SSH public key at provision time. List images from the OVH VPS API / Control Panel for the chosen plan and OS (`Ubuntu 26.04` by default in `.env.example`). Changing this later cannot reinstall an existing VPS. |
+
+Modern OVH VPS catalogs (including `vps-2027-model*`) also require **mandatory cart
+options** such as `storage`, `automatedBackup`, and often `os`. Set those as a
+comma-separated list in `.env` (not secrets; they are public catalog codes):
+
+```bash
+VPS_PLAN_OPTION_CODES=option-linux,option-storage-local-2027-model1,option-auto-backup-2027-1-model1
+```
+
+Discover the codes for your plan from the public catalog (replace `US` with your
+subsidiary):
+
+```bash
+curl -fsSL 'https://api.us.ovhcloud.com/1.0/order/catalog/public/vps?ovhSubsidiary=US' \
+  | jq '.plans[] | select(.planCode=="vps-2027-model1") | .addonFamilies[]
+      | select(.mandatory==true) | {name, addons}'
+```
+
+For `vps-2027-model1`, `option-storage-local-2027-model1` is the only storage
+choice, and automated backup is either `option-auto-backup-2027-1-model1`
+(standard / 1-day) or `option-auto-backup-2027-7-model1` (premium / 7-day).
 
 **OVH API token permissions**
 
@@ -128,15 +149,19 @@ Create the AK/AS/CK as one token with the least rights that match your mode:
 
 - `VPS_MODE=existing` (read an already-running VPS): allow `GET` on `/vps` and `/vps/*`.
 - `VPS_MODE=create` (order and manage a new VPS): allow at least:
-  - `GET` on `/me`, `/vps`, `/vps/*`, `/order/*`
-  - `POST` on `/vps`, `/vps/*`, `/order/*`
+  - `GET` on `/me`, `/me/*`, `/vps`, `/vps/*`, `/order/*`
+  - `POST` on `/me/*`, `/vps`, `/vps/*`, `/order/*`
   - `PUT` on `/vps/*`, `/order/*`
   - `DELETE` on `/order/*` (cart cleanup during ordering)
 
-Do not grant account-wide `/*` rights unless you intentionally want a break-glass
-token. The OVH account must already have a default payment method before create
-mode can place an order. Keep `OVH_ENDPOINT` in `.env` aligned with the portal
-where you created the token (`ovh-eu`, `ovh-ca`, `ovh-us`, and so on).
+OVH token paths are not recursive from a parent route: `GET /me` only
+authorizes that exact call. Create mode also needs `GET /me/payment/method`
+(default payment lookup) and `POST /me/order/*/pay` (checkout), so include
+`/me/*` for both `GET` and `POST`. Do not grant account-wide `/*` rights
+unless you intentionally want a break-glass token. The OVH account must
+already have a default payment method before create mode can place an order.
+Keep `OVH_ENDPOINT` in `.env` aligned with the portal where you created the
+token (`ovh-eu`, `ovh-ca`, `ovh-us`, and so on).
 
 ### Cloudflare DNS and R2
 
@@ -370,6 +395,7 @@ These values are not injected from 1Password (or are safe defaults in
 | `VPS_MODE` | `create` or `existing`. |
 | `VPS_SERVICE_NAME` | Required when `VPS_MODE=existing` (OVH service name). |
 | `VPS_DISPLAY_NAME` | Human-readable name for a newly created VPS. |
+| `VPS_PLAN_OPTION_CODES` | Required for modern create-mode plans. Comma-separated mandatory cart option codes (`os`, `storage`, `automatedBackup`). |
 | `OVH_ENDPOINT` | Must match the OVH API region used to create the token. |
 | `ANSIBLE_SSH_USER` | First-login admin Ansible uses (`debian`, `ubuntu`, or an existing sudo user). |
 | `DEPLOY_USER` | Service account Ansible creates (default `opnform`). |
@@ -389,10 +415,10 @@ These values are not injected from 1Password (or are safe defaults in
 
 ### Choose VPS mode
 
-For a new VPS, set `VPS_MODE=create` and populate the OVH plan, image ID,
-datacenter, and deployment SSH key fields. OpenTofu creates the VPS with
-`prevent_destroy` and ignores later `image_id` changes, so OpenTofu cannot
-reinstall it.
+For a new VPS, set `VPS_MODE=create` and populate the OVH plan, mandatory plan
+options (`VPS_PLAN_OPTION_CODES`), image ID, datacenter, and deployment SSH key
+fields. OpenTofu creates the VPS with `prevent_destroy` and ignores later
+`image_id` changes, so OpenTofu cannot reinstall it.
 
 For an existing VPS, set `VPS_MODE=existing` and `VPS_SERVICE_NAME` to its OVH
 service name. OpenTofu reads the VPS but never imports, destroys, or reinstalls

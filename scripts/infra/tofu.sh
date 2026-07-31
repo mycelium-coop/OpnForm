@@ -34,6 +34,7 @@ else
   export TF_VAR_vps_display_name="${VPS_DISPLAY_NAME}"
   export TF_VAR_vps_subsidiary="${VPS_SUBSIDIARY}"
   export TF_VAR_vps_plan_code="${VPS_PLAN_CODE}"
+  export TF_VAR_vps_plan_option_codes="${VPS_PLAN_OPTION_CODES:-}"
   export TF_VAR_vps_plan_duration="${VPS_PLAN_DURATION}"
   export TF_VAR_vps_pricing_mode="${VPS_PRICING_MODE}"
   export TF_VAR_vps_datacenter="${VPS_DATACENTER}"
