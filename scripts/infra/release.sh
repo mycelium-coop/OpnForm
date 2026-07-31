@@ -32,14 +32,24 @@ release_check() {
   }
   (cd "${root}/client" && npm run lint)
   # Collision/Pest are in Laravel dont-discover, so `php artisan test` is unavailable.
-  # Match CI and ignore deploy .env DB vars from `just` dotenv-load / load_env.
+  # Match CI: ensure api/.env exists, drop stale optimize caches, and ignore deploy
+  # DB vars injected by `just` dotenv-load / load_env.
   (
     cd "${root}/api"
+    if [[ ! -f .env ]]; then
+      cp .env.example .env
+    fi
+    # Keep packages.php/services.php from Composer; drop route/event/config/view caches.
+    find bootstrap/cache -type f \
+      ! -name '.gitignore' \
+      ! -name 'packages.php' \
+      ! -name 'services.php' \
+      -delete
     unset DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DATABASE_URL APP_ENV
     export APP_ENV=testing
     export DB_CONNECTION=sqlite
     export DB_DATABASE=:memory:
-    ./vendor/bin/pest
+    php -d memory_limit=512M ./vendor/bin/pest
   )
 }
 

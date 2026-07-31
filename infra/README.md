@@ -32,6 +32,8 @@ Controller tools:
   `dont-discover` so the Artisan command is not registered):
   - `(cd client && npm install)` — provides `eslint` via `node_modules/.bin`
   - `(cd api && composer install)` — provides `vendor/autoload.php` and Pest
+  - Release checks copy `api/.env.example` to `api/.env` when missing (same as
+    CI) and clear stale `bootstrap/cache` route/event caches before Pest runs
 - Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.
