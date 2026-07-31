@@ -27,10 +27,11 @@ Controller tools:
   PHP 8.3; Homebrew’s default `php` formula may already be 8.5+, which
   `api/composer.lock` does not yet allow.
 - Local package installs in the app trees, because `just release` /
-  `just release-check` run `npm run lint` in `client/` and `php artisan test`
-  in `api/`:
+  `just release-check` run `npm run lint` in `client/` and `./vendor/bin/pest`
+  in `api/` (not `php artisan test`; Collision/Pest are in Laravel
+  `dont-discover` so the Artisan command is not registered):
   - `(cd client && npm install)` — provides `eslint` via `node_modules/.bin`
-  - `(cd api && composer install)` — provides `vendor/autoload.php`
+  - `(cd api && composer install)` — provides `vendor/autoload.php` and Pest
 - Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.
@@ -544,7 +545,7 @@ CONFIRM_PROD=opnform-prod just release
 
 That command:
 
-1. Runs lint/tests (`npm run lint`, `php artisan test`).
+1. Runs lint/tests (`npm run lint`, `api/vendor/bin/pest`).
 2. Builds Linux AMD64 API and client images with Buildx.
 3. Scans them with Trivy (fails on HIGH/CRITICAL).
 4. Pushes to GHCR and writes `.deploy/releases/sha-<40-char-commit>.env`.
