@@ -26,8 +26,21 @@ release_check() {
   for command_name in docker git trivy npm php; do
     require_command "${command_name}"
   done
+  [[ -x "${root}/api/vendor/bin/pest" ]] || {
+    printf '%s\n' 'API test runner is missing. Run: (cd api && composer install)' >&2
+    exit 1
+  }
   (cd "${root}/client" && npm run lint)
-  (cd "${root}/api" && php artisan test)
+  # Collision/Pest are in Laravel dont-discover, so `php artisan test` is unavailable.
+  # Match CI and ignore deploy .env DB vars from `just` dotenv-load / load_env.
+  (
+    cd "${root}/api"
+    unset DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DATABASE_URL APP_ENV
+    export APP_ENV=testing
+    export DB_CONNECTION=sqlite
+    export DB_DATABASE=:memory:
+    ./vendor/bin/pest
+  )
 }
 
 build_image() {

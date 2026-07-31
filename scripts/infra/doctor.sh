@@ -24,8 +24,8 @@ if [[ ! -x "${root}/client/node_modules/.bin/eslint" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${root}/api/vendor/autoload.php" ]]; then
-  printf '%s\n' 'API Composer dependencies are missing. Run: (cd api && composer install)' >&2
+if [[ ! -f "${root}/api/vendor/autoload.php" || ! -x "${root}/api/vendor/bin/pest" ]]; then
+  printf '%s\n' 'API Composer dependencies are missing (need vendor/bin/pest). Run: (cd api && composer install)' >&2
   exit 1
 fi
 
