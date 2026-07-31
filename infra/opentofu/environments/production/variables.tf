@@ -39,6 +39,12 @@ variable "vps_plan_code" {
   default     = ""
 }
 
+variable "vps_plan_option_codes" {
+  description = "Comma-separated OVH cart option plan codes required by the selected VPS plan (for example storage and automatedBackup)."
+  type        = string
+  default     = ""
+}
+
 variable "vps_plan_duration" {
   description = "OVH product-plan duration used in create mode."
   type        = string

@@ -19,6 +19,12 @@ check "vps_mode_inputs" {
   }
 }
 
+locals {
+  vps_plan_option_codes = compact([
+    for code in split(",", var.vps_plan_option_codes) : trimspace(code)
+  ])
+}
+
 resource "ovh_vps" "managed" {
   count = var.vps_mode == "create" ? 1 : 0
 
@@ -43,6 +49,15 @@ resource "ovh_vps" "managed" {
       },
     ]
   }]
+
+  plan_option = [
+    for code in local.vps_plan_option_codes : {
+      duration     = var.vps_plan_duration
+      plan_code    = code
+      pricing_mode = var.vps_pricing_mode
+      quantity     = 1
+    }
+  ]
 
   lifecycle {
     prevent_destroy = true
