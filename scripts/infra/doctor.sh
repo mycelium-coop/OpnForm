@@ -52,6 +52,12 @@ if [[ "${tofu_version}" != "1.12.5" ]]; then
   exit 1
 fi
 
+if ! docker info >/dev/null 2>&1; then
+  printf '%s\n' 'Docker CLI cannot reach the daemon. Start Docker Desktop and confirm `docker info` works.' >&2
+  printf '%s\n' 'On macOS, Docker Desktop uses ~/.docker/run/docker.sock via the desktop-linux context, not always /var/run/docker.sock.' >&2
+  exit 1
+fi
+
 if ! docker buildx version >/dev/null 2>&1; then
   printf '%s\n' 'Docker Buildx is required for immutable image builds.' >&2
   exit 1

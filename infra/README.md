@@ -50,7 +50,11 @@ php -v   # must report 8.3.x (or 8.4.x)
 ```
 
 Also install the 1Password CLI (`op`) and Docker Desktop (with Buildx). Pin or
-verify OpenTofu **1.12.5** after install (`tofu version`).
+verify OpenTofu **1.12.5** after install (`tofu version`). Confirm
+`docker info` works before releasing. Docker Desktop on macOS often uses
+`~/.docker/run/docker.sock` via the `desktop-linux` context rather than
+`/var/run/docker.sock`; `just release` preserves that endpoint when it uses an
+isolated Docker config for GHCR login.
 
 Accounts and resources:
 

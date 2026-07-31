@@ -76,14 +76,32 @@ build_local() {
   trivy image --exit-code 1 --severity HIGH,CRITICAL "${client_tag}"
 }
 
+# Docker Desktop on macOS uses ~/.docker/run/docker.sock via a named context.
+# An empty isolated DOCKER_CONFIG drops that context and falls back to
+# unix:///var/run/docker.sock, which often does not exist. Preserve the active
+# engine endpoint before overriding DOCKER_CONFIG for GHCR login.
+preserve_docker_host() {
+  local docker_host=""
+  if [[ -n "${DOCKER_HOST:-}" ]]; then
+    return 0
+  fi
+  docker_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
+  if [[ -z "${docker_host}" ]]; then
+    printf '%s\n' 'Could not resolve the active Docker endpoint. Is Docker Desktop running?' >&2
+    exit 1
+  fi
+  export DOCKER_HOST="${docker_host}"
+}
+
 publish_images() {
   release_check
   require_value GHCR_PUSH_USERNAME
   require_value GHCR_PUSH_TOKEN
   require_command jq
-  local docker_config
+  local docker_config=""
+  preserve_docker_host
   docker_config="$(mktemp -d)"
-  trap 'rm -rf "${docker_config}"' EXIT
+  trap 'rm -rf "${docker_config:-}"' EXIT
   printf '%s' "${GHCR_PUSH_TOKEN}" | DOCKER_CONFIG="${docker_config}" docker login "${GHCR_HOST}" --username "${GHCR_PUSH_USERNAME}" --password-stdin >/dev/null
   DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.api" "${api_tag}" true
   DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.client" "${client_tag}" true
