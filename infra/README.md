@@ -5,19 +5,44 @@ an existing one. OpenTofu owns only OVH, Cloudflare DNS, and Cloudflare R2.
 Ansible owns the server, host Caddy, Docker services, OIDC bootstrap, backups,
 and immutable application releases.
 
+## End-to-end flow
+
+1. Install controller tools and sync Python/Ansible dependencies.
+2. Create the `tech-admin` / `opnform-secrets` 1Password item.
+3. Render `.env` with `just env`, then set local mode knobs (`VPS_MODE`, OIDC).
+4. Bootstrap R2 buckets, migrate bootstrap state, apply production OpenTofu.
+5. Trust the VPS SSH host key, generate inventory, confirm SSH works.
+6. Run `just release` from a clean commit (build → scan → push → deploy → smoke).
+7. Confirm `https://<OPNFORM_HOSTNAME>` and OIDC callback registration.
+
+Destructive or state-changing commands require
+`CONFIRM_PROD=<DEPLOYMENT_NAME>` (must match `.env` exactly).
+
 ## Prerequisites
 
-- OpenTofu 1.12.5, Docker with Buildx, `just`, `op`, `restic`, `jq`, and `uv`.
-  Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
+Controller tools:
+
+- OpenTofu **1.12.5**, Docker with Buildx, `just`, `op`, `restic`, `jq`, `uv`,
+  `git`, and `curl`.
+- **Trivy** (required by `just release` image scans; not checked by `just doctor`).
+- Local **Node.js/npm** and **PHP 8.3** with Composer dependencies installed in
+  `client/` and `api/`, because release checks run `npm run lint` and
+  `php artisan test`.
+- Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.
-- A Cloudflare zone, an OVH account with a default payment method, and an R2
-  account. The Cloudflare token needs DNS read/write, R2 bucket write, and
-  optionally zone-settings write permissions.
-- A 1Password item named `opnform-secrets` in the `tech-admin` vault with every
-  field referenced by the repository-root `.env.example`.
-- A private GHCR package namespace. The push token needs package write access;
-  the VPS token needs only package read access.
+
+Accounts and resources:
+
+- A Cloudflare zone for the OpnForm hostname, an OVH account with a default
+  payment method, and Cloudflare R2 enabled on the same account.
+- A private GHCR package namespace for the API and client images.
+- A 1Password item named `opnform-secrets` in the `tech-admin` vault. Create
+  every field listed in [Secrets checklist](#secrets-checklist) before rendering
+  `.env`, except `ovh-ssh-password`, which `just env` / deploy create when
+  missing. Field names must match the last segment of each
+  `op://tech-admin/opnform-secrets/<field>` reference in the repository-root
+  `.env.example`.
 
 Install controller dependencies once:
 
@@ -25,6 +50,10 @@ Install controller dependencies once:
 just python-sync
 just doctor
 ```
+
+`just doctor` does not verify Trivy, npm, or PHP. Confirm those before the
+first release. Builds target `IMAGE_PLATFORM` (default `linux/amd64`); on Apple
+Silicon, ensure Docker Buildx can build and push amd64 images.
 
 `just python-sync` creates `infra/ansible/.venv` with the Python version pinned
 in `.python-version`, synchronizes exactly from `uv.lock`, and installs the
@@ -43,29 +72,332 @@ uv lock --project infra/ansible --check
 Commit `pyproject.toml` and `uv.lock` together. Review dependency changes before
 syncing or deploying; `uv run --locked` refuses to operate with a stale lockfile.
 
-## Configure and provision
+## Secrets checklist
 
-Render the ignored local environment file from 1Password:
+`just env` runs `op inject` against `.env.example` and writes an ignored root
+`.env` with mode `0600`. Sign in to 1Password first (`op signin`), then create
+or update the `tech-admin` / `opnform-secrets` item so every referenced field
+exists. Prefer one Login or Secure Note item with custom fields named exactly
+as below.
+
+After the item is complete:
 
 ```sh
 just env
 chmod 600 .env
 ```
 
+`just env` refuses to overwrite an existing `.env`. To re-render:
+
+```sh
+CONFIRM_ENV_CLEAN="$PWD/.env" just env-clean
+just env
+chmod 600 .env
+```
+
+`CONFIRM_ENV_CLEAN` must be the absolute path to the repo `.env`, not the
+deployment name. Non-secret defaults in the generated file may be edited
+locally; keep shell-safe quoting. See
+[Local `.env` knobs](#local-env-knobs) after rendering.
+
+OpenTofu Cloudflare and OVH providers authenticate from process environment
+variables loaded out of `.env` (`CLOUDFLARE_API_TOKEN`, `OVH_*`). Application
+secrets are never OpenTofu inputs, outputs, or state values. The R2 S3 backend
+maps `R2_STATE_*` into `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` only for
+state operations.
+
+### OVH credentials and VPS selection
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `ovh-application-key` | OVH Application Key (AK) | Create an API application at [api.ovh.com/createToken](https://api.ovh.com/createToken/) (or the matching regional portal for `OVH_ENDPOINT`). Store the Application Key. |
+| `ovh-application-secret` | OVH Application Secret (AS) | Shown once when the application is created. |
+| `ovh-consumer-key` | OVH Consumer Key (CK) | Issued with the token after you approve the requested rights. |
+| `ovh-subsidiary` | Billing subsidiary for new orders | Two-letter subsidiary code used by OVH cart orders, for example `FR`, `DE`, `IE`, `PL`, or `US`. Use the subsidiary of the OVH account that will be billed. |
+| `ovh-vps-plan-code` | VPS commercial plan | Required only for `VPS_MODE=create`. Discover codes with the OVH API console under `/order` / VPS catalog (for example `vps-2025-model*`), or copy the plan code from an order confirmation for the SKU you want. |
+| `ovh-vps-datacenter` | Datacenter label | Required only for create mode. Examples: `GRA`, `SBG`, `BHS`, `WAW`. Choose a datacenter where the selected plan is available. |
+| `ovh-vps-image-id` | OS image UUID | Required only for create mode so OpenTofu can inject the deploy SSH public key at provision time. List images from the OVH VPS API / Control Panel for the chosen plan and OS (`Ubuntu 26.04` by default in `.env.example`). Changing this later cannot reinstall an existing VPS. |
+
+**OVH API token permissions**
+
+Create the AK/AS/CK as one token with the least rights that match your mode:
+
+- `VPS_MODE=existing` (read an already-running VPS): allow `GET` on `/vps` and `/vps/*`.
+- `VPS_MODE=create` (order and manage a new VPS): allow at least:
+  - `GET` on `/me`, `/vps`, `/vps/*`, `/order/*`
+  - `POST` on `/vps`, `/vps/*`, `/order/*`
+  - `PUT` on `/vps/*`, `/order/*`
+  - `DELETE` on `/order/*` (cart cleanup during ordering)
+
+Do not grant account-wide `/*` rights unless you intentionally want a break-glass
+token. The OVH account must already have a default payment method before create
+mode can place an order. Keep `OVH_ENDPOINT` in `.env` aligned with the portal
+where you created the token (`ovh-eu`, `ovh-ca`, `ovh-us`, and so on).
+
+### Cloudflare DNS and R2
+
+OpenTofu uses two different Cloudflare credential types:
+
+1. A Cloudflare **API token** (`cloudflare-api-token`) for the Terraform/OpenTofu
+   Cloudflare provider: DNS records, optional SSL zone setting, and R2 bucket
+   creation in bootstrap.
+2. Separate R2 **S3 API credentials** for OpenTofu remote state and restic
+   backups. Those are not interchangeable with the Cloudflare API token.
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `cloudflare-api-token` | OpenTofu Cloudflare provider auth | Cloudflare dashboard → My Profile → API Tokens → Create Token → Create Custom Token. |
+| `cloudflare-account-id` | Account that owns the zone and R2 | Cloudflare dashboard → any domain or R2 overview → Account ID in the right sidebar. |
+| `cloudflare-zone-id` | Zone that will host `opnform-hostname` | Cloudflare dashboard → the zone → Overview → Zone ID. |
+| `opnform-hostname` | Public FQDN for the site | The hostname OpenTofu will point at the VPS, for example `forms.example.com`. It must live in the selected zone. |
+| `caddy-email` | ACME contact email for Caddy | An operator email address used by the host Caddy TLS configuration. |
+| `r2-account-id` | R2 account id used in S3 endpoints | Usually the same value as `cloudflare-account-id`. Shown under R2 → Overview → Account Details. |
+| `r2-state-bucket` | Bucket name for OpenTofu state | Choose a globally unique bucket name. Bootstrap creates it in the EU jurisdiction (`eeur`) with `prevent_destroy`. |
+| `r2-backup-bucket` | Bucket name for restic backups | A second unique bucket name. Bootstrap also creates this bucket with `prevent_destroy`. |
+| `r2-state-access-key-id` | S3 Access Key ID for state | See R2 token timing below. |
+| `r2-state-secret-access-key` | S3 Secret Access Key for state | Shown once when the R2 token is created. |
+| `r2-backup-access-key-id` | S3 Access Key ID for backups | Create a second R2 token for backups. |
+| `r2-backup-secret-access-key` | S3 Secret Access Key for backups | Shown once when the backup R2 token is created. |
+| `restic-password` | Encryption password for restic | Generate a long random secret (`openssl rand -base64 48`). Losing it makes backups unrecoverable. |
+
+**Cloudflare API token permissions** (`cloudflare-api-token`)
+
+Create a custom token limited to the OpnForm account and zone:
+
+| Permission | Access | Required? |
+| --- | --- | --- |
+| Zone → DNS → Edit | Read/write DNS records for `opnform-hostname` | Yes |
+| Zone → Zone → Read | Resolve zone metadata | Recommended |
+| Account → Workers R2 Storage → Edit | Create/list R2 buckets during `just bootstrap-*` | Yes |
+| Zone → Zone Settings → Edit | Set SSL mode to `strict` | Only if you set `CLOUDFLARE_MANAGE_SSL_SETTING=true` in `.env` |
+
+Resource scope: include only the Cloudflare account and the specific zone used
+for OpnForm.
+
+**R2 S3 API token permissions and timing**
+
+`bootstrap-init` through `bootstrap-apply` need only the Cloudflare API token.
+R2 S3 credentials are required starting at `bootstrap-migrate` and for every
+production OpenTofu/restic operation.
+
+Bucket-scoped tokens cannot be created until the buckets exist. Use one of
+these approaches:
+
+1. **Recommended for first deploy:** create two R2 API tokens with
+   **Object Read & Write** and leave them applicable to all buckets. Put those
+   values in 1Password before `just env`. After bootstrap, optionally rotate to
+   bucket-scoped tokens and update `.env`.
+2. **Least privilege later:** run bootstrap with temporary all-bucket tokens,
+   then replace them with Object Read & Write tokens scoped only to the state
+   and backup buckets.
+
+| Token | Permission | Bucket scope |
+| --- | --- | --- |
+| State (`r2-state-*`) | Object Read & Write | All buckets initially, or the state bucket after bootstrap |
+| Backup (`r2-backup-*`) | Object Read & Write | All buckets initially, or the backup bucket after bootstrap |
+
+Prefer Account API tokens for long-lived automation; User API tokens inherit
+the creating user's membership and become invalid if that user leaves the
+account.
+
+One R2 backup bucket holds two restic repositories:
+
+- `…/<r2-backup-bucket>/tofu-state` — encrypted OpenTofu state snapshots
+- `…/<r2-backup-bucket>/opnform` — application database and uploads backups
+
+### SSH access
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `deploy-ssh-public-key-path` | Absolute path to the deploy public key on the controller | Generate an ed25519 keypair for this deployment (`ssh-keygen -t ed25519 -f ~/.ssh/opnform-deploy -C opnform-deploy`). Store the public key path, for example `/Users/you/.ssh/opnform-deploy.pub`. |
+| `deploy-ssh-private-key-path` | Absolute path to the matching private key | Same keypair's private key path. Ansible and `just ssh` use this key. Keep the private key only on the controller filesystem; do not paste the key material into 1Password unless your policy requires it. |
+| `ssh-allowed-cidrs` | CIDRs allowed to reach SSH when UFW is enabled | Comma-separated CIDRs for operator networks, for example `203.0.113.10/32,198.51.100.0/24`. Required in new-VPS mode; wrong CIDRs can lock you out after the first Ansible run. |
+| `ovh-ssh-password` | KVM/console break-glass password | Created automatically by `just env` or deploy when missing (not by `just ansible-check`). Used for local console login only; SSH password authentication stays disabled. Do not rotate casually — regenerating requires updating the host password again via deploy. |
+
+In create mode, OpenTofu installs the public key for the image's default admin
+(`debian` / `ubuntu`) and does not email an initial password
+(`do_not_send_password = true`). Ansible later creates `DEPLOY_USER`, installs
+the same public key for that user, sets `ovh-ssh-password` on `DEPLOY_USER` and
+`ANSIBLE_SSH_USER` for OVH KVM console access, disables password/root SSH, and
+(in create mode) enables UFW for `SSH_ALLOWED_CIDRS` plus ports 80/443.
+
+In existing mode, `ANSIBLE_SSH_USER` must already accept the private key and
+have passwordless sudo. OpenTofu does not install SSH keys onto an existing
+VPS.
+
+### GitHub Container Registry
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `ghcr-owner` | GHCR namespace | GitHub user or organization that owns the private packages, for example `my-org`. |
+| `ghcr-push-username` | Username for image pushes | The GitHub username that owns the push PAT. |
+| `ghcr-push-token` | PAT used by `just release` to push images | GitHub → Settings → Developer settings → Personal access tokens (classic). |
+| `ghcr-pull-username` | Username for VPS image pulls | Often the same user, or a dedicated pull-only bot account. |
+| `ghcr-pull-token` | PAT installed on the VPS for `docker pull` | A second classic PAT with read-only package scope. |
+| `postgres-image` | Postgres image digest reference | Must be digest-pinned. See below. |
+| `redis-image` | Redis image digest reference | Must be digest-pinned. See below. |
+| `nginx-image` | Nginx image digest reference | Must be digest-pinned. See below. |
+
+Create empty private packages named `opnform-api` and `opnform-client` (or let
+the first push create them), then restrict package access to the deployment
+accounts. Authorize classic PATs for organization SSO when the org enforces
+SAML.
+
+**Dependency images must be digest-pinned**
+
+Ansible rejects floating tags. Store values that match
+`<image>@sha256:<64-hex>`, for example:
+
+```sh
+docker buildx imagetools inspect postgres:16 --format '{{.Manifest.Digest}}'
+# store: postgres:16@sha256:<digest>
+docker buildx imagetools inspect redis:7 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect nginx:1 --format '{{.Manifest.Digest}}'
+```
+
+`just release` resolves digests only for the API and client images it publishes.
+Postgres, Redis, and Nginx digests come from these 1Password fields as-is.
+
+**GitHub PAT permissions**
+
+GitHub Packages authentication requires a **classic** personal access token.
+Fine-grained PATs are not sufficient for GHCR in this workflow.
+
+| Token field | Classic scopes | Notes |
+| --- | --- | --- |
+| `ghcr-push-token` | `write:packages`, `read:packages` | `write:packages` is required to publish. Include `read:packages` so the same token can resolve existing tags/digests. |
+| `ghcr-pull-token` | `read:packages` only | Used on the VPS. Do not grant write or delete scopes. |
+
+If the packages are organization-owned, grant the push user Write (or Admin)
+on each package and the pull user Read.
+
+### Application secrets
+
+Generate these once per deployment and never reuse values from another
+environment.
+
+| 1Password field | Purpose | How to create it |
+| --- | --- | --- |
+| `app-key` | Laravel `APP_KEY` | `echo "base64:$(openssl rand -base64 32)"`. Must keep the `base64:` prefix. |
+| `jwt-secret` | JWT signing secret | `openssl rand -base64 48` or any long random string (40+ characters). |
+| `front-api-secret` | Shared secret between Nuxt and Laravel | `openssl rand -base64 32`. |
+| `database-password` | PostgreSQL password for `DB_USERNAME` | Long random password. |
+| `redis-password` | Redis `requirepass` value | Long random password. |
+
+Rotating `app-key` or `jwt-secret` after go-live invalidates encrypted data and
+sessions; treat them as immutable for the life of the deployment unless you
+have an explicit rotation plan.
+
+### SMTP
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `smtp-host` | SMTP server hostname | From your mail provider (Postmark, SES, Mailgun, local relay, and so on). |
+| `smtp-port` | SMTP port | Usually `587` for STARTTLS. `.env.example` sets `MAIL_ENCRYPTION=tls`. |
+| `smtp-username` | SMTP auth username | Provider credentials. |
+| `smtp-password` | SMTP auth password or API secret | Provider credentials. Scope the credential to send-only if the provider supports it. |
+| `smtp-from-address` | Envelope/from address | A verified sender/domain in the mail provider, for example `noreply@example.com`. |
+
+Exact SMTP credential permissions depend on the provider. Prefer a
+send-only key or SMTP user that cannot manage domains, webhooks, or account
+billing.
+
+### Bootstrap administrator
+
+Used only while setup is open on the first release. Choose a strong password
+even if OIDC will take over afterward.
+
+| 1Password field | Purpose |
+| --- | --- |
+| `bootstrap-admin-name` | Display name for the first administrator |
+| `bootstrap-admin-email` | Email for the first administrator |
+| `bootstrap-admin-password` | Password for the first administrator |
+
+### OIDC (optional but enabled by default)
+
+`.env.example` sets `OIDC_ENABLED=true` and `OIDC_FORCE_LOGIN=true`. Leave both
+enabled only after the IdP application exists and the callback URI is
+registered. For a password-first bootstrap, set both to `false` in the
+generated `.env` before the first release and configure SSO later in the UI.
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `oidc-name` | Display name in OpnForm | For example `Company SSO`. |
+| `oidc-slug` | URL slug for the connection | Lowercase slug such as `company-sso`. It appears in the callback path. |
+| `oidc-domain` | Email domain used for IdP routing | For example `example.com`. |
+| `oidc-issuer` | IdP issuer URL | Base issuer from the IdP; confirm `{issuer}/.well-known/openid-configuration` resolves. |
+| `oidc-client-id` | OAuth/OIDC client ID | Created in the IdP application registration. |
+| `oidc-client-secret` | OAuth/OIDC client secret | Created with the IdP application. |
+
+**OIDC client permissions / settings**
+
+Register a confidential web application in your IdP with:
+
+- Grant type: Authorization Code
+- Redirect / callback URI:
+  `https://<opnform-hostname>/auth/<oidc-slug>/callback`
+- Scopes: `openid`, `profile`, and `email` (matches `OIDC_SCOPES_JSON` in
+  `.env.example`)
+- Client authentication: client secret (store it in `oidc-client-secret`)
+
+No IdP admin or directory-write scopes are required. If you use group-to-role
+mappings later, configure the IdP to include a `groups` (or `group`) claim in
+the ID token; the default bootstrap mapping list is empty.
+
+After the first successful OIDC bootstrap, Ansible stores a least-privilege
+automation token only on the VPS at
+`/opt/opnform/secrets/oidc-automation-token`. Later deploys reconcile issuer,
+mappings, and client secret using that token. Do not delete it.
+
+## Local `.env` knobs
+
+These values are not injected from 1Password (or are safe defaults in
+`.env.example`). Review them after `just env`:
+
+| Variable | Notes |
+| --- | --- |
+| `DEPLOYMENT_NAME` | Stable name. Every `CONFIRM_PROD=…` value must match it exactly. |
+| `VPS_MODE` | `create` or `existing`. |
+| `VPS_SERVICE_NAME` | Required when `VPS_MODE=existing` (OVH service name). |
+| `VPS_DISPLAY_NAME` | Human-readable name for a newly created VPS. |
+| `OVH_ENDPOINT` | Must match the OVH API region used to create the token. |
+| `ANSIBLE_SSH_USER` | First-login admin Ansible uses (`debian`, `ubuntu`, or an existing sudo user). |
+| `DEPLOY_USER` | Service account Ansible creates (default `opnform`). |
+| `SSH_PORT` | Must stay consistent with UFW and sshd after hardening. |
+| `CLOUDFLARE_PROXIED` | Default `true`. With origin lockdown, clients must use the hostname via Cloudflare. |
+| `CADDY_ORIGIN_LOCKDOWN` | Default `true`. Direct origin IP requests get 403 when proxying is enabled. |
+| `CLOUDFLARE_MANAGE_SSL_SETTING` | Default `false`. When `true`, OpenTofu sets the zone SSL mode to `strict`. |
+| `OIDC_ENABLED` / `OIDC_FORCE_LOGIN` | See OIDC section. Force login disables password auth after an OIDC connection exists. |
+| `OIDC_*_JSON` | Must remain valid JSON strings. |
+| `OPNFORM_DOCKER_SUBNET` / `OPNFORM_INGRESS_IP` | Must not collide with other Docker networks on the host. |
+| `IMAGE_PLATFORM` | Default `linux/amd64`; must match the VPS architecture. |
+| `BACKUP_*` | systemd timer schedule and restic retention. |
+| `RELEASE_ID` / `OPNFORM_API_IMAGE` / `OPNFORM_CLIENT_IMAGE` | Filled by `just publish` / `just release`. Do not hand-edit floating tags. |
+
+## Configure and provision
+
+### Choose VPS mode
+
 For a new VPS, set `VPS_MODE=create` and populate the OVH plan, image ID,
 datacenter, and deployment SSH key fields. OpenTofu creates the VPS with
-`prevent_destroy`; changing the image ID later cannot reinstall it.
+`prevent_destroy` and ignores later `image_id` changes, so OpenTofu cannot
+reinstall it.
 
 For an existing VPS, set `VPS_MODE=existing` and `VPS_SERVICE_NAME` to its OVH
 service name. OpenTofu reads the VPS but never imports, destroys, or reinstalls
-it. Ansible requires a native systemd Caddy v2 service using a Caddyfile. It
-preserves unrelated sites and adds only the managed import and
-`opnform.caddy` snippet.
+it. Requirements:
 
-`ANSIBLE_SSH_USER` is the existing sudo-capable login Ansible uses. New Debian
-VPS images normally use `debian`; set `ubuntu` for Ubuntu or the appropriate
+- Debian-family OS only (Debian 12/13 or Ubuntu 24.04/26.04).
+- Native systemd Caddy v2 with a Caddyfile at `CADDY_CONFIG_PATH`.
+- The OpnForm hostname must not already appear in unmanaged Caddy site files.
+- Existing mode does not alter the global firewall by default.
+
+`ANSIBLE_SSH_USER` is the existing sudo-capable login Ansible uses. New Ubuntu
+VPS images normally use `ubuntu`; set `debian` for Debian or the appropriate
 administrator account for an existing VPS. The automation creates the separate
 `DEPLOY_USER` account for the service and future operations.
+
+### OpenTofu bootstrap and production
 
 Create the remote state and backup buckets, then migrate the production state
 to R2:
@@ -73,6 +405,7 @@ to R2:
 ```sh
 just bootstrap-init
 just bootstrap-plan
+just bootstrap-show
 CONFIRM_PROD=opnform-production just bootstrap-apply
 CONFIRM_PROD=opnform-production just bootstrap-migrate
 just init
@@ -87,55 +420,124 @@ encrypted R2 state snapshot. On the first plan, the state snapshot is skipped
 because no production state exists yet; the encrypted restic repository is
 initialized automatically before the first snapshot that has state to save.
 
-Verify the VPS SSH host key out-of-band, then generate its ignored inventory:
+Useful outputs after apply:
+
+```sh
+tofu -chdir=infra/opentofu/environments/production output
+```
+
+Note `vps_ipv4`, `opnform_url`, and `oidc_redirect_uri`.
+
+### SSH host key and inventory
+
+Ansible inventory sets `StrictHostKeyChecking=yes`. Trust the VPS host key
+out-of-band before the first deploy:
 
 ```sh
 just inventory
-ssh -i "$SSH_PRIVATE_KEY_PATH" "$DEPLOY_USER@<vps-ip>"
+ssh-keyscan -p "$SSH_PORT" "<vps-ipv4>" >> ~/.ssh/known_hosts
+just ssh
 ```
 
-The initial release creates the first administrator and, when `OIDC_ENABLED`
-is true, creates the workspace OIDC connection. Register this callback URI in
-the identity provider:
+`just ssh` and the inventory connect as `ANSIBLE_SSH_USER`, not `DEPLOY_USER`.
+`DEPLOY_USER` exists only after the first Ansible run. Before first deploy,
+verify:
 
-```text
-https://<OPNFORM_HOSTNAME>/auth/<OIDC_SLUG>/callback
+```sh
+ssh -i "$SSH_PRIVATE_KEY_PATH" -p "$SSH_PORT" "$ANSIBLE_SSH_USER@<vps-ip>"
 ```
 
-The site remains in maintenance mode during bootstrap and is opened only after
-the administrator and requested OIDC connection are configured.
-The bootstrap creates a least-privilege OIDC automation token on the VPS; later
-`just deploy` runs reconcile changes to the configured OIDC issuer, mappings,
-and client secret without storing that automation token in OpenTofu or 1Password.
+## First release
 
-## Release and operations
+Greenfield deployment needs a published digest-pinned release. Do not run bare
+`just deploy` until `RELEASE_ID`, `OPNFORM_API_IMAGE`, and
+`OPNFORM_CLIENT_IMAGE` are set by publish/release.
 
-Create an immutable release from a clean committed worktree:
+From a **clean committed** worktree (dirty trees are refused):
 
 ```sh
 CONFIRM_PROD=opnform-production just release
 ```
 
-The command lints/tests the checkout, builds Linux AMD64 API and client images,
-scans them, pushes them to GHCR, resolves immutable digests, creates a backup,
-and deploys through Ansible. Application releases use a short maintenance
-window because the API container applies migrations at startup.
+That command:
 
-Use these day-two commands:
+1. Runs lint/tests (`npm run lint`, `php artisan test`).
+2. Builds Linux AMD64 API and client images with Buildx.
+3. Scans them with Trivy (fails on HIGH/CRITICAL).
+4. Pushes to GHCR and writes `.deploy/releases/sha-<40-char-commit>.env`.
+5. Runs Ansible `site.yml` (host prep, Caddy, compose release, bootstrap).
+6. Runs smoke checks against `https://$OPNFORM_HOSTNAME`.
+
+Partial path if you want to separate publish from deploy:
+
+```sh
+just release-check
+just publish
+CONFIRM_PROD=opnform-production just deploy-release sha-<40-character-commit>
+```
+
+Local release manifests under `.deploy/releases/` are gitignored. Losing a
+manifest means republishing that commit or rebuilding the digest file before
+`deploy-release`.
+
+### What “done” looks like
+
+- During first bootstrap the site returns HTTP 503
+  (“temporarily undergoing maintenance”) until admin/OIDC setup finishes.
+- Later releases use a short maintenance window; the API container applies
+  migrations at startup.
+- After success, `just smoke` (also run automatically) should pass
+  `/api/healthcheck` and `/login`.
+- Public URL: `https://<OPNFORM_HOSTNAME>`. With Cloudflare proxying and origin
+  lockdown enabled, browsing the raw VPS IP returns 403; use the hostname.
+- Register this callback URI in the identity provider when OIDC is enabled:
+
+```text
+https://<OPNFORM_HOSTNAME>/auth/<OIDC_SLUG>/callback
+```
+
+## Day-two operations
 
 ```sh
 just status
 just logs
+just ssh
+just smoke
+just releases
 CONFIRM_PROD=opnform-production just backup
 just backup-check
 CONFIRM_PROD=opnform-production just rollback sha-<40-character-commit>
 CONFIRM_PROD=opnform-production just restore <restic-snapshot-id>
 ```
 
-A rollback restores the previous image bundle. If a migration is incompatible,
-the release workflow restores the pre-release database/uploads snapshot; do not
-manually alter OpenTofu state or force-unlock it without confirming that no
-operation is active.
+Optional validation helpers: `just fmt-check`, `just validate`,
+`just security-scan` (needs Checkov and Trivy), `just ansible-lint`,
+`just ansible-syntax`, and `just ansible-check`.
+
+### Rollback vs restore
+
+- `just rollback sha-<40>` switches the VPS to a retained image bundle under
+  `/opt/opnform/releases/`. It does **not** reverse database migrations or
+  restore uploads.
+- If a release fails after the first successful deploy, Ansible automatically
+  restores the previous containers and the pre-release database/uploads
+  snapshot when available.
+- `just restore <snapshot-id>` restores an application restic snapshot
+  (database dump + uploads). Snapshot id is a restic hex id or `latest`. It
+  does not restore OpenTofu state or container images.
+- Do not manually alter OpenTofu state or force-unlock it without confirming
+  that no plan/apply is active.
+
+### Commands that require `CONFIRM_PROD`
+
+Must equal `DEPLOYMENT_NAME`:
+
+- `bootstrap-apply`, `bootstrap-migrate`
+- `apply`
+- `release`, `deploy-release`, `deploy`
+- `backup`, `rollback`, `restore`
+
+Plan, inventory, smoke, status, logs, and backup-check do not require it.
 
 ## Security notes
 
@@ -149,3 +551,5 @@ operation is active.
   retain their own policy.
 - Existing VPS mode does not alter the global firewall by default. New VPS mode
   enables UFW for administrative SSH CIDRs and ports 80/443.
+- Molecule role tests (Podman) are optional and not required for production
+  apply or release.
