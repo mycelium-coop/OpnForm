@@ -53,6 +53,19 @@ require_command() {
   fi
 }
 
+export_r2_state_backend_env() {
+  require_value R2_STATE_ACCESS_KEY_ID
+  require_value R2_STATE_SECRET_ACCESS_KEY
+  export AWS_ACCESS_KEY_ID="${R2_STATE_ACCESS_KEY_ID}"
+  export AWS_SECRET_ACCESS_KEY="${R2_STATE_SECRET_ACCESS_KEY}"
+  export AWS_DEFAULT_REGION=auto
+}
+
+r2_s3_endpoint() {
+  require_value R2_ACCOUNT_ID
+  printf 'https://%s.eu.r2.cloudflarestorage.com' "${R2_ACCOUNT_ID}"
+}
+
 # Create ovh-ssh-password in tech-admin/opnform-secrets when missing.
 # Existing values are left unchanged so break-glass credentials stay stable.
 ensure_ovh_ssh_password() {

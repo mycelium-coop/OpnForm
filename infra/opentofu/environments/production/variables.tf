@@ -122,6 +122,12 @@ variable "cloudflare_proxied" {
   default     = true
 }
 
+variable "cloudflare_manage_ipv6_record" {
+  description = "Whether this stack manages an AAAA record for the VPS IPv6 address."
+  type        = bool
+  default     = true
+}
+
 variable "cloudflare_manage_ssl_setting" {
   description = "Whether this stack may modify the zone-wide Cloudflare SSL setting."
   type        = bool

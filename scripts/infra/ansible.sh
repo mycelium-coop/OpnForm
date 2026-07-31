@@ -17,12 +17,18 @@ generated_vars="${ansible_root}/inventories/production/group_vars/all/generated.
 require_command uv
 if [[ "${action}" != "lint" ]]; then
   load_env
+  export R2_S3_ENDPOINT="$(r2_s3_endpoint)"
 fi
 
 generate_inventory() {
   "${root}/scripts/infra/tofu.sh" production init
+  export_r2_state_backend_env
   local host
-  host="$(tofu -chdir="${production_tofu}" output -raw ansible_host)"
+  if ! host="$(tofu -chdir="${production_tofu}" output -no-color -raw ansible_host 2>/dev/null)" ||
+    [[ ! "${host}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf '%s\n' 'Missing a valid ansible_host OpenTofu output. Apply the reviewed production plan before generating inventory.' >&2
+    exit 1
+  fi
   umask 077
   mkdir -p "$(dirname "${inventory_file}")" "$(dirname "${generated_vars}")"
   cat >"${inventory_file}" <<EOF

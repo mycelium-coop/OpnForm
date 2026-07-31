@@ -201,6 +201,11 @@ these approaches:
 | State (`r2-state-*`) | Object Read & Write | All buckets initially, or the state bucket after bootstrap |
 | Backup (`r2-backup-*`) | Object Read & Write | All buckets initially, or the backup bucket after bootstrap |
 
+The bootstrap stack creates both buckets in the EU jurisdiction. Use the
+jurisdiction-specific S3 endpoint shown with the credentials:
+`https://<R2_ACCOUNT_ID>.eu.r2.cloudflarestorage.com`. The default endpoint
+without `.eu` cannot access these buckets.
+
 Prefer Account API tokens for long-lived automation; User API tokens inherit
 the creating user's membership and become invalid if that user leaves the
 account.
@@ -370,6 +375,7 @@ These values are not injected from 1Password (or are safe defaults in
 | `DEPLOY_USER` | Service account Ansible creates (default `opnform`). |
 | `SSH_PORT` | Must stay consistent with UFW and sshd after hardening. |
 | `CLOUDFLARE_PROXIED` | Default `true`. With origin lockdown, clients must use the hostname via Cloudflare. |
+| `CLOUDFLARE_MANAGE_IPV6_RECORD` | Default `true`. Creates the Cloudflare AAAA record from the OVH-reported VPS IPv6 address. Set to `false` if the VPS has no IPv6 address. |
 | `CADDY_ORIGIN_LOCKDOWN` | Default `true`. Direct origin IP requests get 403 when proxying is enabled. |
 | `CLOUDFLARE_MANAGE_SSL_SETTING` | Default `false`. When `true`, OpenTofu sets the zone SSL mode to `strict`. |
 | `OIDC_ENABLED` / `OIDC_FORCE_LOGIN` | See OIDC section. Force login disables password auth after an OIDC connection exists. |

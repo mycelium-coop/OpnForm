@@ -56,8 +56,6 @@ locals {
 
 data "ovh_vps" "selected" {
   service_name = local.vps_service_name
-
-  depends_on = [ovh_vps.managed]
 }
 
 locals {
@@ -83,7 +81,7 @@ resource "cloudflare_dns_record" "opnform_ipv4" {
 }
 
 resource "cloudflare_dns_record" "opnform_ipv6" {
-  count = local.vps_ipv6 == null ? 0 : 1
+  count = var.cloudflare_manage_ipv6_record ? 1 : 0
 
   zone_id = var.cloudflare_zone_id
   name    = var.opnform_hostname
@@ -92,6 +90,13 @@ resource "cloudflare_dns_record" "opnform_ipv6" {
   proxied = var.cloudflare_proxied
   ttl     = var.cloudflare_proxied ? 1 : 300
   comment = "Managed by OpenTofu for ${var.deployment_name}"
+
+  lifecycle {
+    precondition {
+      condition     = local.vps_ipv6 != null
+      error_message = "CLOUDFLARE_MANAGE_IPV6_RECORD is true, but OVH did not report an IPv6 address for the selected VPS. Set it to false to manage only the IPv4 DNS record."
+    }
+  }
 }
 
 resource "cloudflare_zone_setting" "ssl" {

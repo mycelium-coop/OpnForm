@@ -44,6 +44,7 @@ else
   export TF_VAR_opnform_hostname="${OPNFORM_HOSTNAME}"
   export TF_VAR_oidc_slug="${OIDC_SLUG}"
   export TF_VAR_cloudflare_proxied="${CLOUDFLARE_PROXIED}"
+  export TF_VAR_cloudflare_manage_ipv6_record="${CLOUDFLARE_MANAGE_IPV6_RECORD:-true}"
   export TF_VAR_cloudflare_manage_ssl_setting="${CLOUDFLARE_MANAGE_SSL_SETTING}"
 fi
 
@@ -52,14 +53,10 @@ bootstrap_backend_declaration="${root}/infra/opentofu/bootstrap/backend.generate
 bootstrap_backend_mode_file="${root}/infra/opentofu/bootstrap/.backend-mode"
 
 prepare_r2_backend() {
-  local backend_key
-  require_value R2_ACCOUNT_ID
+  local backend_key endpoint
   require_value R2_STATE_BUCKET
-  require_value R2_STATE_ACCESS_KEY_ID
-  require_value R2_STATE_SECRET_ACCESS_KEY
-  export AWS_ACCESS_KEY_ID="${R2_STATE_ACCESS_KEY_ID}"
-  export AWS_SECRET_ACCESS_KEY="${R2_STATE_SECRET_ACCESS_KEY}"
-  export AWS_DEFAULT_REGION="auto"
+  endpoint="$(r2_s3_endpoint)"
+  export_r2_state_backend_env
   if [[ "${stack}" == "bootstrap" ]]; then
     backend_key="opnform/${DEPLOYMENT_NAME}/bootstrap.tfstate"
   else
@@ -70,7 +67,7 @@ prepare_r2_backend() {
 bucket = "${R2_STATE_BUCKET}"
 key = "${backend_key}"
 region = "auto"
-endpoint = "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+endpoint = "${endpoint}"
 skip_credentials_validation = true
 skip_metadata_api_check = true
 skip_region_validation = true
@@ -199,7 +196,11 @@ case "${action}" in
     tofu fmt -check -recursive "${directory}"
     ;;
   validate)
-    tofu -chdir="${directory}" init -backend=false
+    # Re-initializing with -backend=false still loads cached S3 backend
+    # metadata after migration. Only initialize when providers are absent.
+    if [[ ! -d "${directory}/.terraform/providers" ]]; then
+      tofu -chdir="${directory}" init -backend=false
+    fi
     tofu -chdir="${directory}" validate
     ;;
   plan)
@@ -241,7 +242,7 @@ case "${action}" in
     fi
     rm -f "${snapshot_error}"
     chmod 0600 "${snapshot}"
-    export RESTIC_REPOSITORY="s3:https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BACKUP_BUCKET}/tofu-state"
+    export RESTIC_REPOSITORY="s3:$(r2_s3_endpoint)/${R2_BACKUP_BUCKET}/tofu-state"
     export RESTIC_PASSWORD
     export AWS_ACCESS_KEY_ID="${R2_BACKUP_ACCESS_KEY_ID}"
     export AWS_SECRET_ACCESS_KEY="${R2_BACKUP_SECRET_ACCESS_KEY}"
@@ -263,6 +264,7 @@ case "${action}" in
       printf '%s\n' 'Local bootstrap state does not contain both R2 bucket resources. Apply the reviewed bootstrap plan before migrating.' >&2
       exit 1
     fi
+    chmod 0600 "${local_state}"
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     local_state_backup="${local_state}.pre-migration-${timestamp}"
     cp -p "${local_state}" "${local_state_backup}"
@@ -284,8 +286,17 @@ case "${action}" in
     [[ -f "${plan_file}" ]] || { printf 'No saved reviewed plan: %s\n' "${plan_file}" >&2; exit 1; }
     if [[ "${stack}" == "bootstrap" ]]; then
       ensure_bootstrap_initialized
+      if [[ "$(bootstrap_backend_mode)" == "local" ]]; then
+        umask 077
+      fi
     fi
     tofu -chdir="${directory}" apply -lock-timeout=5m "${plan_file}"
+    if [[ "${stack}" == "bootstrap" && "$(bootstrap_backend_mode)" == "local" ]]; then
+      chmod 0600 "${directory}/terraform.tfstate"
+      if [[ -f "${directory}/terraform.tfstate.backup" ]]; then
+        chmod 0600 "${directory}/terraform.tfstate.backup"
+      fi
+    fi
     ;;
   *)
     usage
