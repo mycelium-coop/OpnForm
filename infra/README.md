@@ -23,14 +23,31 @@ Destructive or state-changing commands require
 Controller tools:
 
 - OpenTofu **1.12.5**, Docker with Buildx, `just`, `op`, `restic`, `jq`, `uv`,
-  `git`, and `curl`.
-- **Trivy** (required by `just release` image scans; not checked by `just doctor`).
-- Local **Node.js/npm** and **PHP 8.3** with Composer dependencies installed in
-  `client/` and `api/`, because release checks run `npm run lint` and
-  `php artisan test`.
+  `git`, `curl`, `npm`, **PHP 8.3 or 8.4**, `composer`, and **Trivy**. Prefer
+  PHP 8.3; Homebrew’s default `php` formula may already be 8.5+, which
+  `api/composer.lock` does not yet allow.
+- Local package installs in the app trees, because `just release` /
+  `just release-check` run `npm run lint` in `client/` and `php artisan test`
+  in `api/`:
+  - `(cd client && npm install)` — provides `eslint` via `node_modules/.bin`
+  - `(cd api && composer install)` — provides `vendor/autoload.php`
 - Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.
+
+On macOS with Homebrew, a typical tool install looks like:
+
+```sh
+brew install just opentofu jq restic uv node php@8.3 composer trivy
+brew unlink php 2>/dev/null || true
+brew link php@8.3 --force --overwrite
+php -v   # must report 8.3.x (or 8.4.x)
+(cd client && npm install)
+(cd api && composer install)
+```
+
+Also install the 1Password CLI (`op`) and Docker Desktop (with Buildx). Pin or
+verify OpenTofu **1.12.5** after install (`tofu version`).
 
 Accounts and resources:
 
@@ -53,9 +70,12 @@ just python-sync
 just doctor
 ```
 
-`just doctor` does not verify Trivy, npm, or PHP. Confirm those before the
-first release. Builds target `IMAGE_PLATFORM` (default `linux/amd64`); on Apple
-Silicon, ensure Docker Buildx can build and push amd64 images.
+`just doctor` verifies the controller CLIs (including npm, PHP 8.3/8.4,
+Composer, and Trivy), that `client/node_modules` and `api/vendor` are present,
+the uv lock/environment, Ansible collections, OpenTofu 1.12.5, and Docker
+Buildx. It does not contact OVH, Cloudflare, or the VPS. Builds target
+`IMAGE_PLATFORM` (default `linux/amd64`); on Apple Silicon, ensure Docker
+Buildx can build and push amd64 images.
 
 `just python-sync` creates `infra/ansible/.venv` with the Python version pinned
 in `.python-version`, synchronizes exactly from `uv.lock`, and installs the
@@ -514,9 +534,11 @@ Greenfield deployment needs a published digest-pinned release. Do not run bare
 `just deploy` until `RELEASE_ID`, `OPNFORM_API_IMAGE`, and
 `OPNFORM_CLIENT_IMAGE` are set by publish/release.
 
-From a **clean committed** worktree (dirty trees are refused):
+From a **clean committed** worktree (dirty trees are refused). Run
+`just doctor` first if you have not recently verified release tooling:
 
 ```sh
+just doctor
 CONFIRM_PROD=opnform-prod just release
 ```
 

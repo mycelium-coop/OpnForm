@@ -7,9 +7,27 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 root="$(infra_root)"
 ansible_root="${root}/infra/ansible"
 
-for command_name in op tofu uv docker just git curl jq restic; do
+for command_name in op tofu uv docker just git curl jq restic npm php composer trivy; do
   require_command "${command_name}"
 done
+
+php_version="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+# Match the locked api/ dependencies (several packages still reject PHP 8.5+).
+if [[ "${php_version}" != "8.3" && "${php_version}" != "8.4" ]]; then
+  printf 'PHP 8.3 or 8.4 is required for api/composer.lock; found %s.\n' "${php_version}" >&2
+  printf '%s\n' 'On macOS with Homebrew: brew install php@8.3 && brew unlink php && brew link php@8.3 --force --overwrite' >&2
+  exit 1
+fi
+
+if [[ ! -x "${root}/client/node_modules/.bin/eslint" ]]; then
+  printf '%s\n' 'Client Node dependencies are missing (eslint). Run: (cd client && npm install)' >&2
+  exit 1
+fi
+
+if [[ ! -f "${root}/api/vendor/autoload.php" ]]; then
+  printf '%s\n' 'API Composer dependencies are missing. Run: (cd api && composer install)' >&2
+  exit 1
+fi
 
 if ! uv lock --project "${ansible_root}" --check >/dev/null; then
   printf '%s\n' 'The uv lockfile is missing or stale. Run `just python-lock`.' >&2
@@ -40,4 +58,5 @@ if ! docker buildx version >/dev/null 2>&1; then
 fi
 
 python_version="$(uv run --project "${ansible_root}" --locked --no-sync -- python -c 'import platform; print(platform.python_version())')"
-printf 'Controller prerequisites are available (OpenTofu %s, Python %s managed by uv).\n' "${tofu_version}" "${python_version}"
+printf 'Controller prerequisites are available (OpenTofu %s, PHP %s, Python %s managed by uv).\n' \
+  "${tofu_version}" "${php_version}" "${python_version}"
