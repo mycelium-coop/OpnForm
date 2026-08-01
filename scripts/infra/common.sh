@@ -150,6 +150,24 @@ confirm_production() {
   fi
 }
 
+# Prefer the 1Password SSH agent when present. Deploy keys are often public-key
+# path stubs (*.pub) that require agent signing; Cursor/launchd SSH_AUTH_SOCK
+# cannot authorize those signatures.
+prefer_onepassword_ssh_agent() {
+  local candidates=(
+    "${HOME}/.1password/agent.sock"
+    "${HOME}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+  )
+  local candidate=""
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -S "${candidate}" ]]; then
+      export SSH_AUTH_SOCK="${candidate}"
+      return 0
+    fi
+  done
+}
+
 release_directory() {
   printf '%s/.deploy/releases' "$(infra_root)"
 }

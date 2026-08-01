@@ -537,6 +537,13 @@ verify:
 ssh -i "$SSH_PRIVATE_KEY_PATH" -p "$SSH_PORT" "$ANSIBLE_SSH_USER@<vps-ip>"
 ```
 
+If `SSH_PRIVATE_KEY_PATH` is a `.pub` stub for the **1Password SSH agent**, unlock
+1Password first and confirm a normal Terminal can sign with that key. Ansible
+helpers prefer the agent socket at
+`~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock` (or
+`~/.1password/agent.sock`) when present. Approve the 1Password authorization
+prompt when SSH/Ansible asks to use the key.
+
 ## First release
 
 Greenfield deployment needs a published digest-pinned release. Do not run bare
