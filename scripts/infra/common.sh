@@ -27,6 +27,11 @@ load_env() {
         if [[ ${#value} -ge 2 ]] && { [[ "${first_character}" == '"' && "${last_character}" == '"' ]] || [[ "${first_character}" == "'" && "${last_character}" == "'" ]]; }; then
           value="${value:1:${#value}-2}"
         fi
+        # Keep caller/manifest exports (e.g. RELEASE_ID from deploy-release).
+        # An empty .env entry must not wipe a value already set in the environment.
+        if [[ -n "${!key:-}" ]]; then
+          continue
+        fi
         export "${key}=${value}"
         ;;
       *)
