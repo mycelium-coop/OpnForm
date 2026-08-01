@@ -17,6 +17,7 @@ generated_vars="${ansible_root}/inventories/production/group_vars/all/generated.
 require_command uv
 if [[ "${action}" != "lint" ]]; then
   load_env
+  prefer_onepassword_ssh_agent
   export R2_S3_ENDPOINT="$(r2_s3_endpoint)"
 fi
 
@@ -24,6 +25,7 @@ generate_inventory() {
   "${root}/scripts/infra/tofu.sh" production init
   export_r2_state_backend_env
   local host
+  local ssh_common_args="-o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
   if ! host="$(tofu -chdir="${production_tofu}" output -no-color -raw ansible_host 2>/dev/null)" ||
     [[ ! "${host}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
     printf '%s\n' 'Missing a valid ansible_host OpenTofu output. Apply the reviewed production plan before generating inventory.' >&2
@@ -41,7 +43,7 @@ all:
           ansible_user: ${ANSIBLE_SSH_USER}
           ansible_port: ${SSH_PORT}
           ansible_ssh_private_key_file: ${SSH_PRIVATE_KEY_PATH}
-          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes'
+          ansible_ssh_common_args: '${ssh_common_args}'
 EOF
   cat >"${generated_vars}" <<EOF
 opnform_deployment_name: ${DEPLOYMENT_NAME}
