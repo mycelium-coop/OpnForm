@@ -1,0 +1,462 @@
+#!/usr/bin/env bash
+# Restrict OpnForm web origin ingress (TCP 80/443) to Cloudflare IP ranges.
+set -Eeuo pipefail
+
+APP_NAME="opnform"
+CHAIN="OPNFORM_CF_ORIGIN"
+SET4="OPNFORM_CF4"
+SET6="OPNFORM_CF6"
+SET4_NEXT="${SET4}_NEXT"
+SET6_NEXT="${SET6}_NEXT"
+COMMENT="${APP_NAME}-cloudflare-origin-lock"
+STATE_DIR="/var/lib/${APP_NAME}-cloudflare-origin-firewall"
+FALLBACK_DIR="/opt/opnform/firewall"
+LOCK_FILE="/run/lock/${APP_NAME}-cloudflare-origin-firewall.lock"
+UFW_MARKER_BEGIN="# BEGIN ${COMMENT}"
+UFW_MARKER_END="# END ${COMMENT}"
+SSH_PORT="${OPNFORM_SSH_PORT:-{{ opnform_ssh_port }}}"
+EXT_IF="${OPNFORM_EXT_IF:-}"
+
+log() { printf '%s\n' "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+ipt() { iptables -w "$@"; }
+ip6t() { ip6tables -w "$@"; }
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+require_nonempty_file() {
+  local path="$1"
+  [[ -f "${path}" ]] || die "Missing range file: ${path}"
+  [[ -s "${path}" ]] || die "Empty range file: ${path}"
+}
+
+detect_ext_if() {
+  if [[ -n "${EXT_IF}" ]]; then
+    printf '%s\n' "${EXT_IF}"
+    return 0
+  fi
+  ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+}
+
+has_global_ipv6() {
+  ip -6 -o address show scope global up 2>/dev/null | grep -q .
+}
+
+ufw_active() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | grep -qi '^Status: active'
+}
+
+ensure_dirs() {
+  mkdir -p "${STATE_DIR}/caddy" "${FALLBACK_DIR}" "$(dirname "${LOCK_FILE}")"
+}
+
+ensure_ipset() {
+  local name="$1" family="$2"
+  if ! ipset list "${name}" >/dev/null 2>&1; then
+    ipset create "${name}" hash:net family "${family}" hashsize 64 maxelem 256
+  fi
+}
+
+load_ipset_from_file() {
+  local name="$1" family="$2" file="$3"
+  require_nonempty_file "${file}"
+  ipset destroy "${name}" 2>/dev/null || true
+  ipset create "${name}" hash:net family "${family}" hashsize 64 maxelem 256
+  local cidr
+  while IFS= read -r cidr || [[ -n "${cidr}" ]]; do
+    [[ -z "${cidr}" || "${cidr}" =~ ^# ]] && continue
+    ipset add "${name}" "${cidr}"
+  done <"${file}"
+}
+
+ensure_chain_v4() {
+  if ! ipt -L "${CHAIN}" -n >/dev/null 2>&1; then
+    ipt -N "${CHAIN}" || die "Failed to create iptables chain ${CHAIN}"
+  fi
+  ipt -F "${CHAIN}"
+  ipt -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  if ipset list "${SET4}" >/dev/null 2>&1; then
+    ipt -A "${CHAIN}" -m set --match-set "${SET4}" src -j RETURN
+  fi
+  ipt -A "${CHAIN}" -p tcp -j REJECT --reject-with tcp-reset
+}
+
+ensure_chain_v6() {
+  if ! ip6t -L "${CHAIN}" -n >/dev/null 2>&1; then
+    ip6t -N "${CHAIN}" || die "Failed to create ip6tables chain ${CHAIN}"
+  fi
+  ip6t -F "${CHAIN}"
+  ip6t -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  if ipset list "${SET6}" >/dev/null 2>&1; then
+    ip6t -A "${CHAIN}" -m set --match-set "${SET6}" src -j RETURN
+  fi
+  ip6t -A "${CHAIN}" -p tcp -j REJECT --reject-with tcp-reset
+}
+
+install_input_jumps_v4() {
+  local ext_if="$1" port
+  for port in 80 443; do
+    if ! ipt -C INPUT -i "${ext_if}" -p tcp --dport "${port}" -m comment --comment "${COMMENT}" -j "${CHAIN}" 2>/dev/null; then
+      ipt -I INPUT 1 -i "${ext_if}" -p tcp --dport "${port}" -m comment --comment "${COMMENT}" -j "${CHAIN}"
+    fi
+  done
+}
+
+install_input_jumps_v6() {
+  local ext_if="$1" port
+  for port in 80 443; do
+    if ! ip6t -C INPUT -i "${ext_if}" -p tcp --dport "${port}" -m comment --comment "${COMMENT}" -j "${CHAIN}" 2>/dev/null; then
+      ip6t -I INPUT 1 -i "${ext_if}" -p tcp --dport "${port}" -m comment --comment "${COMMENT}" -j "${CHAIN}"
+    fi
+  done
+}
+
+remove_input_jumps_v4() {
+  local rule
+  while read -r rule; do
+    [[ -z "${rule}" ]] && continue
+    # shellcheck disable=SC2086
+    ipt -D INPUT ${rule} 2>/dev/null || true
+  done < <(ipt -S INPUT | awk -v c="${COMMENT}" '
+    $1 == "-A" && index($0, c) {
+      sub(/^-A INPUT /, "", $0)
+      print
+    }')
+}
+
+remove_input_jumps_v6() {
+  local rule
+  while read -r rule; do
+    [[ -z "${rule}" ]] && continue
+    # shellcheck disable=SC2086
+    ip6t -D INPUT ${rule} 2>/dev/null || true
+  done < <(ip6t -S INPUT | awk -v c="${COMMENT}" '
+    $1 == "-A" && index($0, c) {
+      sub(/^-A INPUT /, "", $0)
+      print
+    }')
+}
+
+ufw_before_block() {
+  local set_name="$1"
+  cat <<EOF
+${UFW_MARKER_BEGIN}
+:${CHAIN} - [0:0]
+-A ${CHAIN} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A ${CHAIN} -m set --match-set ${set_name} src -j RETURN
+-A ${CHAIN} -p tcp -j REJECT --reject-with tcp-reset
+-A ufw-before-input -p tcp --dport 80 -m comment --comment "${COMMENT}" -j ${CHAIN}
+-A ufw-before-input -p tcp --dport 443 -m comment --comment "${COMMENT}" -j ${CHAIN}
+${UFW_MARKER_END}
+EOF
+}
+
+install_ufw_hooks() {
+  local file="$1" set_name="$2"
+  [[ -f "${file}" ]] || die "UFW rules file missing: ${file}"
+  local tmp block
+  tmp="$(mktemp)"
+  awk -v begin="${UFW_MARKER_BEGIN}" -v end="${UFW_MARKER_END}" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "${file}" >"${tmp}"
+
+  grep -q '^COMMIT$' "${tmp}" || die "Could not locate COMMIT in ${file}"
+  block="$(ufw_before_block "${set_name}")"
+  awk -v block="${block}" '
+    /^COMMIT$/ && !done {
+      print block
+      done = 1
+    }
+    { print }
+  ' "${tmp}" >"${file}.opnform-new"
+  mv "${file}.opnform-new" "${file}"
+  rm -f "${tmp}"
+}
+
+remove_ufw_hooks() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  awk -v begin="${UFW_MARKER_BEGIN}" -v end="${UFW_MARKER_END}" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "${file}" >"${tmp}"
+  mv "${tmp}" "${file}"
+}
+
+remove_legacy_per_cidr_returns_v4() {
+  local spec
+  while read -r spec; do
+    [[ -z "${spec}" ]] && continue
+    # shellcheck disable=SC2086
+    ipt -D "${CHAIN}" ${spec} 2>/dev/null || true
+  done < <(ipt -S "${CHAIN}" 2>/dev/null | awk '
+    $1 == "-A" && / -s / && / -j RETURN/ {
+      sub(/^-A '"${CHAIN}"' /, "", $0)
+      print
+    }')
+}
+
+remove_legacy_per_cidr_returns_v6() {
+  local spec
+  while read -r spec; do
+    [[ -z "${spec}" ]] && continue
+    # shellcheck disable=SC2086
+    ip6t -D "${CHAIN}" ${spec} 2>/dev/null || true
+  done < <(ip6t -S "${CHAIN}" 2>/dev/null | awk '
+    $1 == "-A" && / -s / && / -j RETURN/ {
+      sub(/^-A '"${CHAIN}"' /, "", $0)
+      print
+    }')
+}
+
+assert_no_ssh_rules() {
+  local dump
+  dump="$(ipt -S 2>/dev/null || true; ip6t -S 2>/dev/null || true)"
+  if printf '%s\n' "${dump}" | grep -E -- "--(dport|sport)[[:space:]]+${SSH_PORT}([[:space:]]|$)" | grep -F "${COMMENT}" >/dev/null; then
+    die "Managed origin-lock rules must never reference SSH port ${SSH_PORT}"
+  fi
+  if printf '%s\n' "${dump}" | grep -E -- "--(dport|sport)[[:space:]]+22([[:space:]]|$)" | grep -F "${COMMENT}" >/dev/null; then
+    die "Managed origin-lock rules must never reference SSH port 22"
+  fi
+}
+
+cmd_initialize() {
+  ensure_dirs
+  require_nonempty_file "${FALLBACK_DIR}/cloudflare-ips-v4.txt"
+  if [[ ! -s "${STATE_DIR}/active-v4.txt" ]]; then
+    cp "${FALLBACK_DIR}/cloudflare-ips-v4.txt" "${STATE_DIR}/active-v4.txt"
+  fi
+  if [[ -s "${FALLBACK_DIR}/cloudflare-ips-v6.txt" && ! -s "${STATE_DIR}/active-v6.txt" ]]; then
+    cp "${FALLBACK_DIR}/cloudflare-ips-v6.txt" "${STATE_DIR}/active-v6.txt"
+  elif [[ ! -f "${STATE_DIR}/active-v6.txt" ]]; then
+    : >"${STATE_DIR}/active-v6.txt"
+  fi
+  /usr/local/libexec/opnform-cloudflare-ip-ranges render-caddy \
+    --v4-file "${STATE_DIR}/active-v4.txt" \
+    --v6-file "${STATE_DIR}/active-v6.txt" \
+    --output "${STATE_DIR}/caddy/opnform-cloudflare-gate.caddy"
+  log "Initialized origin-lock state from fallback snapshots (firewall still disabled)."
+}
+
+cmd_stage() {
+  local v4_file="${1:-}"
+  local v6_file="${2:-}"
+  [[ -n "${v4_file}" ]] || die "stage requires v4 and v6 file paths"
+  [[ -n "${v6_file}" ]] || die "stage requires v4 and v6 file paths"
+  require_nonempty_file "${v4_file}"
+  load_ipset_from_file "${SET4_NEXT}" inet "${v4_file}"
+  if has_global_ipv6 && [[ -s "${v6_file}" ]]; then
+    load_ipset_from_file "${SET6_NEXT}" inet6 "${v6_file}"
+  else
+    ipset destroy "${SET6_NEXT}" 2>/dev/null || true
+  fi
+}
+
+cmd_commit() {
+  ensure_ipset "${SET4}" inet
+  if ! ipset list "${SET4_NEXT}" >/dev/null 2>&1; then
+    die "Missing staged set ${SET4_NEXT}; run stage first"
+  fi
+  ipset swap "${SET4_NEXT}" "${SET4}"
+  if has_global_ipv6 && ipset list "${SET6_NEXT}" >/dev/null 2>&1; then
+    ensure_ipset "${SET6}" inet6
+    if ! ipset swap "${SET6_NEXT}" "${SET6}"; then
+      log "IPv6 swap failed; rolling IPv4 swap back"
+      ipset swap "${SET4_NEXT}" "${SET4}"
+      die "Failed to swap IPv6 ipset"
+    fi
+  fi
+}
+
+cmd_rollback_staged() {
+  if ipset list "${SET4_NEXT}" >/dev/null 2>&1 && ipset list "${SET4}" >/dev/null 2>&1; then
+    ipset swap "${SET4_NEXT}" "${SET4}" 2>/dev/null || true
+  fi
+  if ipset list "${SET6_NEXT}" >/dev/null 2>&1 && ipset list "${SET6}" >/dev/null 2>&1; then
+    ipset swap "${SET6_NEXT}" "${SET6}" 2>/dev/null || true
+  fi
+  ipset destroy "${SET4_NEXT}" 2>/dev/null || true
+  ipset destroy "${SET6_NEXT}" 2>/dev/null || true
+}
+
+cmd_finalize() {
+  ipset destroy "${SET4_NEXT}" 2>/dev/null || true
+  ipset destroy "${SET6_NEXT}" 2>/dev/null || true
+}
+
+verify_set_matches_file() {
+  local set_name="$1" file="$2"
+  require_nonempty_file "${file}"
+  local expected actual cidr
+  expected="$(grep -vE '^(#|$)' "${file}" | wc -l | tr -d ' ')"
+  actual="$(ipset list "${set_name}" | awk '/^Number of entries:/ { print $4 }')"
+  [[ "${expected}" == "${actual}" ]] || die "ipset ${set_name} entry count ${actual} != file count ${expected}"
+  while IFS= read -r cidr || [[ -n "${cidr}" ]]; do
+    [[ -z "${cidr}" || "${cidr}" =~ ^# ]] && continue
+    ipset test "${set_name}" "${cidr}" >/dev/null 2>&1 || die "ipset ${set_name} missing ${cidr}"
+  done <"${file}"
+}
+
+cmd_verify_files() {
+  local v4_file="${1:-${STATE_DIR}/active-v4.txt}"
+  local v6_file="${2:-${STATE_DIR}/active-v6.txt}"
+  verify_set_matches_file "${SET4}" "${v4_file}"
+  if has_global_ipv6 && [[ -s "${v6_file}" ]]; then
+    verify_set_matches_file "${SET6}" "${v6_file}"
+  fi
+}
+
+cmd_apply() {
+  exec 9>"${LOCK_FILE}"
+  flock 9
+  ensure_dirs
+  require_cmd ipset
+  require_cmd iptables
+  require_nonempty_file "${STATE_DIR}/active-v4.txt"
+
+  local ext_if
+  ext_if="$(detect_ext_if)"
+  [[ -n "${ext_if}" ]] || die "Could not detect external interface; set OPNFORM_EXT_IF"
+
+  ensure_ipset "${SET4}" inet
+  load_ipset_from_file "${SET4}" inet "${STATE_DIR}/active-v4.txt"
+  ensure_chain_v4
+
+  if ufw_active; then
+    install_ufw_hooks /etc/ufw/before.rules "${SET4}"
+    remove_input_jumps_v4
+    ufw reload >/dev/null
+    ensure_chain_v4
+  else
+    remove_ufw_hooks /etc/ufw/before.rules 2>/dev/null || true
+    install_input_jumps_v4 "${ext_if}"
+  fi
+
+  if has_global_ipv6; then
+    require_cmd ip6tables
+    if [[ -s "${STATE_DIR}/active-v6.txt" ]]; then
+      ensure_ipset "${SET6}" inet6
+      load_ipset_from_file "${SET6}" inet6 "${STATE_DIR}/active-v6.txt"
+      ensure_chain_v6
+      if ufw_active; then
+        install_ufw_hooks /etc/ufw/before6.rules "${SET6}"
+        remove_input_jumps_v6
+        ufw reload >/dev/null
+        ensure_chain_v4
+        ensure_chain_v6
+      else
+        remove_ufw_hooks /etc/ufw/before6.rules 2>/dev/null || true
+        install_input_jumps_v6 "${ext_if}"
+      fi
+    fi
+  else
+    log "No global IPv6 address; tearing down IPv6 origin-lock artifacts."
+    remove_input_jumps_v6 2>/dev/null || true
+    remove_ufw_hooks /etc/ufw/before6.rules 2>/dev/null || true
+    ip6t -F "${CHAIN}" 2>/dev/null || true
+    ip6t -X "${CHAIN}" 2>/dev/null || true
+    ipset destroy "${SET6}" 2>/dev/null || true
+  fi
+
+  remove_legacy_per_cidr_returns_v4
+  if has_global_ipv6; then
+    remove_legacy_per_cidr_returns_v6
+  fi
+  assert_no_ssh_rules
+  cmd_verify_files
+  log "Origin lock applied on ${ext_if} for TCP 80/443."
+}
+
+cmd_disable() {
+  exec 9>"${LOCK_FILE}"
+  flock 9
+  remove_input_jumps_v4 2>/dev/null || true
+  remove_input_jumps_v6 2>/dev/null || true
+  remove_ufw_hooks /etc/ufw/before.rules
+  remove_ufw_hooks /etc/ufw/before6.rules
+  if ufw_active; then
+    ufw reload >/dev/null || true
+  fi
+  ipt -F "${CHAIN}" 2>/dev/null || true
+  ipt -X "${CHAIN}" 2>/dev/null || true
+  ip6t -F "${CHAIN}" 2>/dev/null || true
+  ip6t -X "${CHAIN}" 2>/dev/null || true
+  ipset destroy "${SET4}" 2>/dev/null || true
+  ipset destroy "${SET6}" 2>/dev/null || true
+  ipset destroy "${SET4_NEXT}" 2>/dev/null || true
+  ipset destroy "${SET6_NEXT}" 2>/dev/null || true
+  log "Origin lock disabled."
+}
+
+cmd_status() {
+  printf 'unit: '
+  systemctl is-active opnform-cloudflare-origin-firewall.service 2>/dev/null || true
+  printf 'enabled: '
+  systemctl is-enabled opnform-cloudflare-origin-firewall.service 2>/dev/null || true
+  printf 'ufw_active: %s\n' "$(ufw_active && echo yes || echo no)"
+  printf 'ext_if: %s\n' "$(detect_ext_if || true)"
+  printf 'global_ipv6: %s\n' "$(has_global_ipv6 && echo yes || echo no)"
+  echo '--- iptables ---'
+  ipt -S "${CHAIN}" 2>/dev/null || echo "(no chain)"
+  ipt -S INPUT 2>/dev/null | grep -F "${COMMENT}" || true
+  echo '--- ip6tables ---'
+  ip6t -S "${CHAIN}" 2>/dev/null || echo "(no chain)"
+  ip6t -S INPUT 2>/dev/null | grep -F "${COMMENT}" || true
+  echo '--- ipset ---'
+  ipset list "${SET4}" 2>/dev/null || echo "(no ${SET4})"
+  ipset list "${SET6}" 2>/dev/null || echo "(no ${SET6})"
+}
+
+cmd_verify() {
+  assert_no_ssh_rules
+  local ext_if
+  ext_if="$(detect_ext_if)"
+  [[ -n "${ext_if}" ]] || die "Could not detect external interface"
+  if ufw_active; then
+    grep -Fq "${UFW_MARKER_BEGIN}" /etc/ufw/before.rules || die "UFW before.rules missing origin-lock block"
+  else
+    ipt -C INPUT -i "${ext_if}" -p tcp --dport 443 -m comment --comment "${COMMENT}" -j "${CHAIN}" \
+      || die "Missing IPv4 INPUT jump for 443"
+    ipt -C INPUT -i "${ext_if}" -p tcp --dport 80 -m comment --comment "${COMMENT}" -j "${CHAIN}" \
+      || die "Missing IPv4 INPUT jump for 80"
+  fi
+  ipt -C "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN \
+    || die "Missing ESTABLISHED,RELATED rule"
+  ipt -C "${CHAIN}" -m set --match-set "${SET4}" src -j RETURN \
+    || die "Missing IPv4 ipset RETURN"
+  ipt -C "${CHAIN}" -p tcp -j REJECT --reject-with tcp-reset \
+    || die "Missing TCP REJECT rule"
+  cmd_verify_files
+  log "Origin lock verification passed."
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "${cmd}" in
+    initialize) cmd_initialize "$@" ;;
+    apply) cmd_apply "$@" ;;
+    stage) cmd_stage "$@" ;;
+    commit) cmd_commit "$@" ;;
+    rollback-staged) cmd_rollback_staged "$@" ;;
+    finalize) cmd_finalize "$@" ;;
+    verify-files) cmd_verify_files "$@" ;;
+    disable) cmd_disable "$@" ;;
+    status) cmd_status "$@" ;;
+    verify) cmd_verify "$@" ;;
+    *)
+      die "Usage: $0 {initialize|apply|stage|commit|rollback-staged|finalize|verify-files|disable|status|verify}"
+      ;;
+  esac
+}
+
+main "$@"

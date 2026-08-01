@@ -159,3 +159,51 @@ backup-check:
 # Restore a restic snapshot: just restore <snapshot-id>.
 restore snapshot:
     @scripts/infra/ansible.sh restore {{ snapshot }}
+
+# Install Cloudflare origin-lock assets (firewall unit left disabled).
+origin-lock-install:
+    @scripts/infra/origin-lock.sh install
+
+# Enable and verify the Cloudflare origin firewall.
+origin-lock-enable:
+    @scripts/infra/origin-lock.sh enable
+
+# Disable the Cloudflare origin firewall and tear down rules.
+origin-lock-disable:
+    @scripts/infra/origin-lock.sh disable
+
+# Show origin-lock and sync status on the VPS.
+origin-lock-status:
+    @scripts/infra/origin-lock.sh status
+
+# Install the Cloudflare IP sync timer assets (timer left disabled).
+origin-lock-sync-install:
+    @scripts/infra/origin-lock.sh sync-install
+
+# Run one manual Cloudflare IP sync with verification.
+origin-lock-sync-run:
+    @scripts/infra/origin-lock.sh sync-run
+
+# Enable the daily Cloudflare IP sync timer.
+origin-lock-sync-enable:
+    @scripts/infra/origin-lock.sh sync-enable
+
+# Disable the daily Cloudflare IP sync timer.
+origin-lock-sync-disable:
+    @scripts/infra/origin-lock.sh sync-disable
+
+# Apply reviewed Cloudflare IP removals: CONFIRM_CLOUDFLARE_IP_ETAG=<etag> just origin-lock-approve-removals
+origin-lock-approve-removals:
+    @scripts/infra/origin-lock.sh approve-removals
+
+# Restore the previous Cloudflare IP range generation on the VPS.
+origin-lock-rollback-ranges:
+    @scripts/infra/origin-lock.sh rollback-ranges
+
+# From the workstation, prove direct origin 80/443 access is blocked.
+origin-block-check:
+    @scripts/infra/origin-lock.sh block-check
+
+# Refresh tracked Cloudflare fallback snapshots in the repo (DRY_RUN=1 shows diff).
+ips-refresh:
+    @scripts/infra/origin-lock.sh ips-refresh

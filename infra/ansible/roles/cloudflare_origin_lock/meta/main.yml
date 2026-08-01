@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  author: OpnForm
+  description: Cloudflare origin IP lock and range synchronizer for host Caddy.
+  min_ansible_version: '2.20'
+dependencies: []

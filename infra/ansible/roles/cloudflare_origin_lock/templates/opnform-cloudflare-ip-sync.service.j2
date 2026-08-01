@@ -1,0 +1,16 @@
+[Unit]
+Description=Synchronize Cloudflare IP ranges for OpnForm origin lock
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/opnform-cloudflare-ip-sync sync
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ opnform_cloudflare_origin_lock_state_dir }} /run/lock /etc/caddy
+TimeoutStartSec=10min

@@ -116,6 +116,9 @@
     proto: tcp
   loop: ['80', '443']
   when: opnform_manage_firewall | bool
+  # Wide-open 80/443 remain until origin-lock is enabled. Once enabled,
+  # UFW before.rules jump to OPNFORM_CF_ORIGIN and non-Cloudflare clients
+  # are rejected before these allow rules matter.
 
 - name: Deny other inbound traffic on a new VPS
   community.general.ufw:

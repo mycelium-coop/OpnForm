@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# Synchronize Cloudflare IP ranges for OpnForm origin lock and Caddy remote_ip.
+set -Eeuo pipefail
+
+APP_NAME="opnform"
+STATE_DIR="/var/lib/${APP_NAME}-cloudflare-origin-firewall"
+LOCK_FILE="/run/lock/${APP_NAME}-cloudflare-origin-firewall.lock"
+ENV_FILE="/etc/default/${APP_NAME}-cloudflare-ip-sync"
+RANGES_HELPER="/usr/local/libexec/${APP_NAME}-cloudflare-ip-ranges"
+FIREWALL="/usr/local/sbin/${APP_NAME}-cloudflare-origin-firewall"
+CADDY_SNIPPET="${STATE_DIR}/caddy/opnform-cloudflare-gate.caddy"
+CADDY_CONFIG="{{ opnform_caddy_config_path }}"
+CADDY_BIN="{{ opnform_caddy_custom_binary }}"
+CADDY_SERVICE="{{ opnform_caddy_service_name }}"
+HOSTNAME="{{ opnform_hostname }}"
+
+log() { printf '%s\n' "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+parse_env_file() {
+  CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL=""
+  OPNFORM_HOSTNAME="${HOSTNAME}"
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      ''|'#'*) continue ;;
+      *=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        if [[ ${#value} -ge 2 ]]; then
+          local first="${value:0:1}" last="${value: -1}"
+          if { [[ "${first}" == '"' && "${last}" == '"' ]] || [[ "${first}" == "'" && "${last}" == "'" ]]; }; then
+            value="${value:1:${#value}-2}"
+          fi
+        fi
+        case "${key}" in
+          CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL|OPNFORM_HOSTNAME)
+            printf -v "${key}" '%s' "${value}"
+            ;;
+          *)
+            log "Ignoring unexpected key in ${ENV_FILE}: ${key}"
+            ;;
+        esac
+        ;;
+      *)
+        die "Invalid environment line in ${ENV_FILE}"
+        ;;
+    esac
+  done <"${ENV_FILE}"
+}
+
+healthcheck() {
+  local path_suffix="${1:-}"
+  local url="${CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL:-}"
+  [[ -n "${url}" ]] || return 0
+  case "${url}" in
+    https://*) ;;
+    *)
+      log "Warning: CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL must start with https://; skipping ping"
+      return 0
+      ;;
+  esac
+  case "${url}" in
+    *[[:space:]]*|*$'\n'*|*$'\r'*)
+      log "Warning: CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL contains whitespace; skipping ping"
+      return 0
+      ;;
+  esac
+  local target="${url%/}/${path_suffix}"
+  target="${target%/}"
+  printf 'url = "%s"\n' "${target}" | curl --silent --show-error --max-time 15 --config - >/dev/null 2>&1 \
+    || log "Warning: healthcheck ping failed for ${path_suffix:-success}"
+}
+
+acquire_lock() {
+  exec 9>"${LOCK_FILE}"
+  if ! flock -n 9; then
+    log "Origin-lock lock is held; exiting"
+    exit 75
+  fi
+}
+
+firewall_unit_active() {
+  systemctl is-active --quiet opnform-cloudflare-origin-firewall.service
+}
+
+load_caddy_dns_env() {
+  local env_file="/etc/caddy/opnform.env"
+  [[ -f "${env_file}" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      ''|'#'*) continue ;;
+      CLOUDFLARE_DNS_API_TOKEN=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        if [[ ${#value} -ge 2 ]]; then
+          local first="${value:0:1}" last="${value: -1}"
+          if { [[ "${first}" == '"' && "${last}" == '"' ]] || [[ "${first}" == "'" && "${last}" == "'" ]]; }; then
+            value="${value:1:${#value}-2}"
+          fi
+        fi
+        export CLOUDFLARE_DNS_API_TOKEN="${value}"
+        ;;
+    esac
+  done <"${env_file}"
+}
+
+reload_caddy_snippet() {
+  local snippet="$1"
+  [[ -s "${snippet}" ]] || {
+    log "Refusing to install empty Caddy snippet"
+    return 1
+  }
+  load_caddy_dns_env
+  local backup="${CADDY_SNIPPET}.bak.$$"
+  if [[ -f "${CADDY_SNIPPET}" ]]; then
+    cp -a "${CADDY_SNIPPET}" "${backup}"
+  fi
+  install -m 0644 "${snippet}" "${CADDY_SNIPPET}"
+  if ! "${CADDY_BIN}" validate --config "${CADDY_CONFIG}" --adapter caddyfile >/dev/null; then
+    if [[ -f "${backup}" ]]; then
+      mv "${backup}" "${CADDY_SNIPPET}"
+      "${CADDY_BIN}" validate --config "${CADDY_CONFIG}" --adapter caddyfile >/dev/null || true
+      systemctl reload "${CADDY_SERVICE}" || true
+    fi
+    log "Caddy validation failed for new Cloudflare gate snippet"
+    return 1
+  fi
+  if ! systemctl reload "${CADDY_SERVICE}"; then
+    if [[ -f "${backup}" ]]; then
+      mv "${backup}" "${CADDY_SNIPPET}"
+      systemctl reload "${CADDY_SERVICE}" || true
+    fi
+    log "Caddy reload failed after snippet update"
+    return 1
+  fi
+  rm -f "${backup}"
+  return 0
+}
+
+restore_state_snapshot() {
+  local snapshot_dir="$1"
+  [[ -d "${snapshot_dir}" ]] || return 0
+  cp -a "${snapshot_dir}/." "${STATE_DIR}/"
+}
+
+on_host_smoke() {
+  local host="${OPNFORM_HOSTNAME}"
+  curl --fail --silent --show-error --max-time 30 \
+    --resolve "${host}:443:127.0.0.1" "https://${host}/api/healthcheck" >/dev/null || return 1
+  curl --fail --silent --show-error --max-time 30 \
+    --resolve "${host}:443:127.0.0.1" -o /dev/null "https://${host}/login" || return 1
+  return 0
+}
+
+public_cf_ray_check() {
+  local host="${OPNFORM_HOSTNAME}"
+  local headers
+  headers="$(curl --fail --silent --show-error --max-time 30 -D - -o /dev/null "https://${host}/api/healthcheck")" || return 1
+  printf '%s\n' "${headers}" | grep -qi '^cf-ray:' || {
+    log "Public response missing cf-ray header"
+    return 1
+  }
+  return 0
+}
+
+apply_live_change() {
+  local next_v4="$1"
+  local next_v6="$2"
+  local snapshot_dir
+  snapshot_dir="$(mktemp -d)"
+  cp -a "${STATE_DIR}/." "${snapshot_dir}/"
+  local staged_snippet
+  staged_snippet="$(mktemp)"
+  local previous_snippet_backup=""
+  if [[ -f "${CADDY_SNIPPET}" ]]; then
+    previous_snippet_backup="$(mktemp)"
+    cp -a "${CADDY_SNIPPET}" "${previous_snippet_backup}"
+  fi
+
+  cleanup_failure() {
+    log "Live change failed; attempting rollback"
+    "${FIREWALL}" rollback-staged || log "WARNING: rollback-staged failed; operator intervention required"
+    if [[ -n "${previous_snippet_backup}" && -f "${previous_snippet_backup}" ]]; then
+      install -m 0644 "${previous_snippet_backup}" "${CADDY_SNIPPET}"
+      systemctl reload "${CADDY_SERVICE}" || log "WARNING: Caddy reload during rollback failed"
+    fi
+    restore_state_snapshot "${snapshot_dir}"
+    rm -rf "${snapshot_dir}" "${staged_snippet}"
+    [[ -n "${previous_snippet_backup}" ]] && rm -f "${previous_snippet_backup}"
+  }
+
+  "${RANGES_HELPER}" render-caddy \
+    --v4-file "${next_v4}" \
+    --v6-file "${next_v6}" \
+    --output "${staged_snippet}"
+
+  if ! reload_caddy_snippet "${staged_snippet}"; then
+    cleanup_failure
+    die "Failed to reload Caddy with updated Cloudflare ranges"
+  fi
+
+  if firewall_unit_active; then
+    if ! "${FIREWALL}" stage "${next_v4}" "${next_v6}"; then
+      cleanup_failure
+      die "firewall stage failed"
+    fi
+    if ! "${FIREWALL}" commit; then
+      cleanup_failure
+      die "firewall commit failed"
+    fi
+    if ! "${FIREWALL}" verify-files "${next_v4}" "${next_v6}"; then
+      cleanup_failure
+      die "firewall verify-files failed"
+    fi
+  else
+    log "Firewall unit inactive; updated state and Caddy only (enforcement not enabled)."
+  fi
+
+  if ! on_host_smoke; then
+    cleanup_failure
+    die "On-host smoke checks failed"
+  fi
+  if ! public_cf_ray_check; then
+    cleanup_failure
+    die "Public cf-ray check failed"
+  fi
+
+  if firewall_unit_active; then
+    "${FIREWALL}" finalize
+  fi
+
+  mkdir -p "${STATE_DIR}"
+  if [[ -f "${STATE_DIR}/active-v4.txt" ]]; then
+    cp "${STATE_DIR}/active-v4.txt" "${STATE_DIR}/previous-v4.txt"
+  fi
+  if [[ -f "${STATE_DIR}/active-v6.txt" ]]; then
+    cp "${STATE_DIR}/active-v6.txt" "${STATE_DIR}/previous-v6.txt"
+  fi
+  cp "${next_v4}" "${STATE_DIR}/active-v4.txt"
+  cp "${next_v6}" "${STATE_DIR}/active-v6.txt"
+  date -u +%Y-%m-%dT%H:%M:%SZ >"${STATE_DIR}/last-success"
+  rm -rf "${snapshot_dir}" "${staged_snippet}"
+  [[ -n "${previous_snippet_backup}" ]] && rm -f "${previous_snippet_backup}"
+}
+
+cmd_check() {
+  parse_env_file
+  local tmp
+  tmp="$(mktemp -d)"
+  "${RANGES_HELPER}" prepare \
+    --state-dir "${STATE_DIR}" \
+    --next-v4 "${tmp}/next-v4.txt" \
+    --next-v6 "${tmp}/next-v6.txt" >/dev/null
+  cat "${STATE_DIR}/summary.json"
+  rm -rf "${tmp}"
+}
+
+cmd_sync() {
+  parse_env_file
+  acquire_lock
+  healthcheck start
+  healthcheck log
+  local tmp summary
+  tmp="$(mktemp -d)"
+  if ! summary="$("${RANGES_HELPER}" prepare --state-dir "${STATE_DIR}" --next-v4 "${tmp}/next-v4.txt" --next-v6 "${tmp}/next-v6.txt")"; then
+    healthcheck fail
+    rm -rf "${tmp}"
+    die "prepare failed"
+  fi
+  log "${summary}"
+  if ! apply_live_change "${tmp}/next-v4.txt" "${tmp}/next-v6.txt"; then
+    healthcheck fail
+    rm -rf "${tmp}"
+    exit 1
+  fi
+  healthcheck
+  rm -rf "${tmp}"
+  log "Cloudflare IP sync completed."
+}
+
+cmd_approve_removals() {
+  parse_env_file
+  local confirm="${CONFIRM_CLOUDFLARE_IP_ETAG:-}"
+  [[ -n "${confirm}" ]] || die "Set CONFIRM_CLOUDFLARE_IP_ETAG to the reviewed pending ETag"
+  case "${confirm}" in
+    ''|*[!A-Za-z0-9._:-]*)
+      die "CONFIRM_CLOUDFLARE_IP_ETAG has invalid characters"
+      ;;
+  esac
+  local stored
+  stored="$(tr -d '[:space:]' <"${STATE_DIR}/etag")"
+  [[ "${confirm}" == "${stored}" ]] || die "ETag mismatch: supplied ${confirm} != stored ${stored}"
+
+  acquire_lock
+  local next_v4 next_v6
+  next_v4="$(mktemp)"
+  next_v6="$(mktemp)"
+  # Approving removals means next_active becomes the candidate sets exactly.
+  cp "${STATE_DIR}/candidate-v4.txt" "${next_v4}"
+  cp "${STATE_DIR}/candidate-v6.txt" "${next_v6}"
+  [[ -s "${next_v4}" ]] || die "candidate-v4.txt is empty"
+  apply_live_change "${next_v4}" "${next_v6}"
+  : >"${STATE_DIR}/pending-removals-v4.txt"
+  : >"${STATE_DIR}/pending-removals-v6.txt"
+  rm -f "${next_v4}" "${next_v6}"
+  log "Approved Cloudflare IP removals for ETag ${confirm}."
+}
+
+cmd_rollback() {
+  parse_env_file
+  acquire_lock
+  [[ -s "${STATE_DIR}/previous-v4.txt" ]] || die "No previous-v4.txt to restore"
+  local next_v4 next_v6
+  next_v4="$(mktemp)"
+  next_v6="$(mktemp)"
+  cp "${STATE_DIR}/previous-v4.txt" "${next_v4}"
+  if [[ -f "${STATE_DIR}/previous-v6.txt" ]]; then
+    cp "${STATE_DIR}/previous-v6.txt" "${next_v6}"
+  else
+    : >"${next_v6}"
+  fi
+  apply_live_change "${next_v4}" "${next_v6}"
+  rm -f "${next_v4}" "${next_v6}"
+  log "Rolled Cloudflare IP ranges back to the previous generation."
+}
+
+cmd_status() {
+  parse_env_file
+  printf 'last-success: %s\n' "$(cat "${STATE_DIR}/last-success" 2>/dev/null || echo none)"
+  printf 'etag: %s\n' "$(tr -d '[:space:]' <"${STATE_DIR}/etag" 2>/dev/null || echo none)"
+  if [[ -f "${STATE_DIR}/summary.json" ]]; then
+    cat "${STATE_DIR}/summary.json"
+  fi
+  printf 'timer: '
+  systemctl is-enabled opnform-cloudflare-ip-sync.timer 2>/dev/null || true
+  systemctl is-active opnform-cloudflare-ip-sync.timer 2>/dev/null || true
+}
+
+main() {
+  local cmd="${1:-}"
+  case "${cmd}" in
+    check) cmd_check ;;
+    sync) cmd_sync ;;
+    approve-removals) cmd_approve_removals ;;
+    rollback) cmd_rollback ;;
+    status) cmd_status ;;
+    *)
+      die "Usage: $0 {check|sync|approve-removals|rollback|status}"
+      ;;
+  esac
+}
+
+main "$@"

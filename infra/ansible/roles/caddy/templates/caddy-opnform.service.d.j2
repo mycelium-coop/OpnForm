@@ -1,0 +1,6 @@
+[Service]
+EnvironmentFile=-{{ opnform_caddy_env_file }}
+ExecStart=
+ExecStart={{ opnform_caddy_custom_binary }} run --environ --config {{ opnform_caddy_config_path }}
+ExecReload=
+ExecReload={{ opnform_caddy_custom_binary }} reload --config {{ opnform_caddy_config_path }} --force

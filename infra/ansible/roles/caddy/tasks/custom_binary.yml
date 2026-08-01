@@ -1,0 +1,95 @@
+---
+- name: Require a Cloudflare DNS API token for ACME DNS-01
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_dns_api_token | length > 0
+    fail_msg: >-
+      CLOUDFLARE_DNS_API_TOKEN is required for host Caddy DNS-01 (Zone:Read +
+      DNS:Edit). Add cloudflare-dns-api-token to tech-admin/opnform-secrets and
+      re-run `just env`.
+
+- name: Download Caddy binary with the Cloudflare DNS plugin
+  ansible.builtin.get_url:
+    url: >-
+      https://caddyserver.com/api/download?os=linux&arch={{ opnform_caddy_download_arch }}&version={{ opnform_caddy_custom_version }}&p=github.com/caddy-dns/cloudflare
+    dest: "{{ opnform_caddy_custom_binary }}.tmp"
+    owner: root
+    group: root
+    mode: '0755'
+    force: true
+    timeout: 120
+
+- name: Install the custom Caddy binary atomically
+  ansible.builtin.command:
+    argv:
+      - install
+      - -m
+      - '0755'
+      - -o
+      - root
+      - -g
+      - root
+      - "{{ opnform_caddy_custom_binary }}.tmp"
+      - "{{ opnform_caddy_custom_binary }}"
+  changed_when: true
+
+- name: Remove the temporary Caddy download
+  ansible.builtin.file:
+    path: "{{ opnform_caddy_custom_binary }}.tmp"
+    state: absent
+
+- name: Verify the custom Caddy binary reports v2
+  ansible.builtin.command:
+    argv:
+      - "{{ opnform_caddy_custom_binary }}"
+      - version
+  register: opnform_caddy_custom_version_check
+  changed_when: false
+  failed_when: opnform_caddy_custom_version_check.stdout is not search('v?2\\.')
+
+- name: Verify the Cloudflare DNS module is present
+  ansible.builtin.command:
+    argv:
+      - "{{ opnform_caddy_custom_binary }}"
+      - list-modules
+  register: opnform_caddy_modules
+  changed_when: false
+  failed_when: "'dns.providers.cloudflare' not in opnform_caddy_modules.stdout"
+
+- name: Create the Caddy systemd drop-in directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ opnform_caddy_service_name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the OpnForm Caddy systemd drop-in
+  ansible.builtin.template:
+    src: caddy-opnform.service.d.j2
+    dest: "/etc/systemd/system/{{ opnform_caddy_service_name }}.service.d/opnform.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: caddy reload systemd
+
+- name: Render the Caddy DNS environment file
+  ansible.builtin.template:
+    src: opnform.env.j2
+    dest: "{{ opnform_caddy_env_file }}"
+    owner: root
+    group: caddy
+    mode: '0640'
+  no_log: true
+  diff: false
+  notify: caddy reload systemd
+
+- name: Flush Caddy handlers before using the custom binary
+  ansible.builtin.meta: flush_handlers
+
+- name: Restart Caddy on the custom binary
+  ansible.builtin.systemd:
+    name: "{{ opnform_caddy_service_name }}"
+    state: restarted
+    daemon_reload: true
+    enabled: true

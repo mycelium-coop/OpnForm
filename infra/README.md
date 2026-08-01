@@ -205,6 +205,7 @@ OpenTofu uses two different Cloudflare credential types:
 | 1Password field | Purpose | How to create or find it |
 | --- | --- | --- |
 | `cloudflare-api-token` | OpenTofu Cloudflare provider auth | Cloudflare dashboard → My Profile → API Tokens → Create Token → Create Custom Token. |
+| `cloudflare-dns-api-token` | Host Caddy ACME DNS-01 | Separate custom token with Zone → Zone → Read and Zone → DNS → Edit only. Do not reuse the OpenTofu token. |
 | `cloudflare-account-id` | Account that owns the zone and R2 | Cloudflare dashboard → any domain or R2 overview → Account ID in the right sidebar. |
 | `cloudflare-zone-id` | Zone that will host `opnform-hostname` | Cloudflare dashboard → the zone → Overview → Zone ID. |
 | `opnform-hostname` | Public FQDN for the site | The hostname OpenTofu will point at the VPS, for example `forms.example.com`. It must live in the selected zone. |
@@ -231,6 +232,14 @@ Create a custom token limited to the OpnForm account and zone:
 
 Resource scope: include only the Cloudflare account and the specific zone used
 for OpnForm.
+
+**Cloudflare DNS API token** (`cloudflare-dns-api-token`)
+
+Used only by host Caddy for Let's Encrypt / ZeroSSL **DNS-01** challenges
+(`tls { dns cloudflare ... }`). Scope it to the OpnForm zone with
+Zone → Zone → Read and Zone → DNS → Edit. Keep it separate from
+`cloudflare-api-token` so rotating OpenTofu credentials does not break
+certificate renewal. Token problems break renewal; the origin IP lock does not.
 
 **R2 S3 API token permissions and timing**
 
@@ -284,6 +293,8 @@ In create mode, OpenTofu installs the public key for the image's default admin
 the same public key for that user, sets `ovh-ssh-password` on `DEPLOY_USER` and
 `ANSIBLE_SSH_USER` for OVH KVM console access, disables password/root SSH, and
 (in create mode) enables UFW for `SSH_ALLOWED_CIDRS` plus ports 80/443.
+After `just origin-lock-enable`, UFW `before.rules` reject non-Cloudflare
+clients on 80/443 before those wide allow rules apply.
 
 In existing mode, `ANSIBLE_SSH_USER` must already accept the private key and
 have passwordless sudo. OpenTofu does not install SSH keys onto an existing
@@ -431,7 +442,9 @@ These values are not injected from 1Password (or are safe defaults in
 | `SSH_PORT` | Must stay consistent with UFW and sshd after hardening. |
 | `CLOUDFLARE_PROXIED` | Default `true`. With origin lockdown, clients must use the hostname via Cloudflare. |
 | `CLOUDFLARE_MANAGE_IPV6_RECORD` | Default `true`. Creates the Cloudflare AAAA record from the OVH-reported VPS IPv6 address. Set to `false` if the VPS has no IPv6 address. |
-| `CADDY_ORIGIN_LOCKDOWN` | Default `true`. Direct origin IP requests get 403 when proxying is enabled. |
+| `CADDY_ORIGIN_LOCKDOWN` | Default `true`. App-layer Caddy `remote_ip` gate; direct origin peers get HTTP 403 when proxying is enabled. |
+| `CLOUDFLARE_DNS_API_TOKEN` | Required. Caddy ACME DNS-01 token (Zone:Read + DNS:Edit). |
+| `CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL` | Optional. Healthchecks.io-compatible ping URL for the IP sync timer. |
 | `CLOUDFLARE_MANAGE_SSL_SETTING` | Default `false`. When `true`, OpenTofu sets the zone SSL mode to `strict`. |
 | `OIDC_ENABLED` / `OIDC_FORCE_LOGIN` | See OIDC section. Force login disables password auth after an OIDC connection exists. |
 | `OIDC_*_JSON` | Must remain valid JSON strings. |
@@ -587,13 +600,96 @@ manifest means republishing that commit or rebuilding the digest file before
   migrations at startup.
 - After success, `just smoke` (also run automatically) should pass
   `/api/healthcheck` and `/login`.
-- Public URL: `https://<OPNFORM_HOSTNAME>`. With Cloudflare proxying and origin
-  lockdown enabled, browsing the raw VPS IP returns 403; use the hostname.
+- Public URL: `https://<OPNFORM_HOSTNAME>`. With Cloudflare proxying and Caddy
+  origin lockdown, browsing the raw VPS IP returns HTTP 403 until the network
+  origin lock is enabled; after `just origin-lock-enable`, direct origin TCP
+  80/443 from non-Cloudflare addresses is reset instead.
 - Register this callback URI in the identity provider when OIDC is enabled:
 
 ```text
 https://<OPNFORM_HOSTNAME>/auth/<OIDC_SLUG>/callback
 ```
+
+## Cloudflare network origin lock
+
+Two layers protect the origin:
+
+1. **App layer** (`CADDY_ORIGIN_LOCKDOWN`): Caddy `remote_ip` allowlist imported
+   from `/var/lib/opnform-cloudflare-origin-firewall/caddy/opnform-cloudflare-gate.caddy`.
+   Non-Cloudflare clients that reach Caddy get HTTP 403.
+2. **Network layer** (`opnform-cloudflare-origin-firewall`): `ipset` + iptables
+   (UFW `before.rules` when UFW is active, otherwise `INPUT`) allow TCP 80/443
+   only from Cloudflare ranges. Non-Cloudflare clients get TCP reset. SSH is
+   never touched.
+
+Caddy uses **DNS-01** via `caddy-dns/cloudflare` and
+`CLOUDFLARE_DNS_API_TOKEN`, so certificate renewal is outbound-only and does
+not require inbound Let's Encrypt access.
+
+### Rollout
+
+Keep an independent key-only SSH session open. Prefer OVH KVM console available
+before any reboot.
+
+1. Deploy with DNS-01 Caddy and origin-lock assets installed (**firewall and
+   sync timer remain disabled**). Direct origin access still works at the TCP
+   layer; Caddy may already return HTTP 403 for non-Cloudflare clients when
+   app-layer lockdown is on.
+2. Confirm the hostname is orange-clouded. Verify TLS and login through
+   Cloudflare (`just smoke` and browser auth flows).
+3. Enable the network lock and run all four checks:
+
+```sh
+CONFIRM_PROD=opnform-prod just origin-lock-enable
+just smoke
+just origin-block-check
+# SSH check is included in origin-block-check
+just origin-lock-status
+```
+
+4. Install/run the synchronizer, then enable the timer:
+
+```sh
+CONFIRM_PROD=opnform-prod just origin-lock-sync-install
+CONFIRM_PROD=opnform-prod just origin-lock-sync-run
+CONFIRM_PROD=opnform-prod just origin-lock-sync-enable
+```
+
+5. Reboot only with console access available, then repeat smoke,
+   `origin-block-check`, and SSH.
+
+Immediate rollback of the network lock:
+
+```sh
+CONFIRM_PROD=opnform-prod just origin-lock-disable
+```
+
+### Range maintenance
+
+- Daily timer fetches the Cloudflare API + `ips-v4` / `ips-v6`, cross-checks
+  them, auto-applies **additions**, and stages **removals** as pending.
+- Review `summary.json` / pending removals on the host, then:
+
+```sh
+CONFIRM_CLOUDFLARE_IP_ETAG='<pending-etag>' CONFIRM_PROD=opnform-prod just origin-lock-approve-removals
+```
+
+- Tracked fallbacks in
+  `infra/ansible/roles/cloudflare_origin_lock/files/cloudflare-ips-*.txt`
+  are bootstrap-only. Refresh with `just ips-refresh` (or `DRY_RUN=1 just
+  ips-refresh`). Merging that change does **not** update the live VPS and does
+  **not** approve pending removals.
+
+### Failure modes
+
+- A failed apply can leave the unit enabled with partial rules. Disable before
+  further container/Caddy churn, reinstall/enable, and re-run the four checks.
+- A nonzero exit does not mean nothing changed; inspect
+  `just origin-lock-status` before retrying.
+- Empty range files abort; the allowlist is never applied empty.
+- Cloudflare shrinking ranges requires explicit ETag approval.
+- ACME renewal failures are almost always DNS token scope/expiry, not the
+  firewall.
 
 ## Day-two operations
 
@@ -603,6 +699,7 @@ just logs
 just ssh
 just smoke
 just releases
+just origin-lock-status
 CONFIRM_PROD=opnform-prod just backup
 just backup-check
 CONFIRM_PROD=opnform-prod just rollback sha-<40-character-commit>
@@ -635,8 +732,13 @@ Must equal `DEPLOYMENT_NAME`:
 - `apply`
 - `release`, `deploy-release`, `deploy`
 - `backup`, `rollback`, `restore`
+- `origin-lock-install`, `origin-lock-enable`, `origin-lock-disable`
+- `origin-lock-sync-install`, `origin-lock-sync-run`, `origin-lock-sync-enable`,
+  `origin-lock-sync-disable`, `origin-lock-approve-removals`,
+  `origin-lock-rollback-ranges`
 
-Plan, inventory, smoke, status, logs, and backup-check do not require it.
+Plan, inventory, smoke, status, logs, backup-check, `origin-lock-status`,
+`origin-block-check`, and `ips-refresh` do not require it.
 
 ## Security notes
 
@@ -646,9 +748,13 @@ Plan, inventory, smoke, status, logs, and backup-check do not require it.
 - Docker registry passwords are supplied through stdin; Ansible suppresses logs
   and diffs for every secret-bearing task.
 - Caddy exposes only the loopback Docker ingress. With Cloudflare proxying
-  enabled, the OpnForm site rejects direct-origin peers while other Caddy sites
-  retain their own policy.
-- Existing VPS mode does not alter the global firewall by default. New VPS mode
-  enables UFW for administrative SSH CIDRs and ports 80/443.
+  enabled, the OpnForm site rejects direct-origin peers at the app layer
+  (HTTP 403) while other Caddy sites retain their own policy.
+- After `origin-lock-enable`, TCP 80/443 accept only Cloudflare source ranges
+  (UFW before.rules or INPUT). Existing VPS mode does not alter the global
+  firewall by default. New VPS mode enables UFW for administrative SSH CIDRs
+  and ports 80/443; the origin lock tightens web ingress when enabled.
+- Caddy data directories hold ACME certificates and must survive redeploys;
+  do not wipe them casually.
 - Molecule role tests (Podman) are optional and not required for production
   apply or release.
