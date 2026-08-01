@@ -60,6 +60,7 @@ opnform_caddy_service_name: ${CADDY_SERVICE_NAME}
 opnform_caddy_config_path: ${CADDY_CONFIG_PATH}
 opnform_caddy_snippet_dir: ${CADDY_SNIPPET_DIR}
 opnform_caddy_package_version: '${CADDY_PACKAGE_VERSION}'
+opnform_cloudflare_ip_sync_healthchecks_url: '${CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL:-}'
 opnform_backup_schedule: '${BACKUP_SCHEDULE}'
 opnform_backup_keep_daily: ${BACKUP_KEEP_DAILY}
 opnform_backup_keep_weekly: ${BACKUP_KEEP_WEEKLY}

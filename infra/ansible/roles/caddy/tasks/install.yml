@@ -24,7 +24,7 @@
     filename: caddy-stable
     state: present
 
-- name: Install Caddy v2
+- name: Install Caddy v2 package for user, directories, and unit
   ansible.builtin.apt:
     name: "{{ 'caddy=' ~ opnform_caddy_package_version if opnform_caddy_package_version | length > 0 else 'caddy' }}"
     state: present

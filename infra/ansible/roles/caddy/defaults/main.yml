@@ -8,3 +8,9 @@ opnform_cloudflare_proxied: true
 opnform_caddy_origin_lockdown: true
 opnform_hostname: ''
 opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
+opnform_caddy_dns_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_DNS_API_TOKEN', default='') }}"
+opnform_caddy_custom_version: 'v2.10.0'
+opnform_caddy_custom_binary: /usr/local/bin/caddy-opnform
+opnform_caddy_env_file: /etc/caddy/opnform.env
+opnform_cloudflare_gate_snippet: /var/lib/opnform-cloudflare-origin-firewall/caddy/opnform-cloudflare-gate.caddy
+opnform_caddy_download_arch: "{{ 'arm64' if (lookup('ansible.builtin.env', 'IMAGE_PLATFORM', default='linux/amd64') | trim) == 'linux/arm64' else 'amd64' }}"

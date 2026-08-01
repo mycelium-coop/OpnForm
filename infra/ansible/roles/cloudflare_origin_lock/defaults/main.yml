@@ -1,0 +1,10 @@
+---
+opnform_ssh_port: 22
+opnform_hostname: ''
+opnform_caddy_service_name: caddy
+opnform_caddy_config_path: /etc/caddy/Caddyfile
+opnform_caddy_custom_binary: /usr/local/bin/caddy-opnform
+opnform_cloudflare_origin_lock_state_dir: /var/lib/opnform-cloudflare-origin-firewall
+opnform_cloudflare_origin_lock_fallback_dir: /opt/opnform/firewall
+opnform_cloudflare_gate_snippet: /var/lib/opnform-cloudflare-origin-firewall/caddy/opnform-cloudflare-gate.caddy
+opnform_cloudflare_ip_sync_healthchecks_url: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_IP_SYNC_HEALTHCHECKS_URL', default='') }}"

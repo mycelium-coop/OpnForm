@@ -1,0 +1,123 @@
+---
+- name: Install origin-lock packages
+  ansible.builtin.apt:
+    name:
+      - ipset
+      - iptables
+      - curl
+      - python3
+    state: present
+    update_cache: true
+
+- name: Create origin-lock directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ opnform_cloudflare_origin_lock_state_dir }}"
+    - "{{ opnform_cloudflare_origin_lock_state_dir }}/caddy"
+    - "{{ opnform_cloudflare_origin_lock_fallback_dir }}"
+    - /usr/local/libexec
+    - /run/lock
+
+- name: Install tracked Cloudflare IPv4 fallback snapshot
+  ansible.builtin.copy:
+    src: cloudflare-ips-v4.txt
+    dest: "{{ opnform_cloudflare_origin_lock_fallback_dir }}/cloudflare-ips-v4.txt"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install tracked Cloudflare IPv6 fallback snapshot
+  ansible.builtin.copy:
+    src: cloudflare-ips-v6.txt
+    dest: "{{ opnform_cloudflare_origin_lock_fallback_dir }}/cloudflare-ips-v6.txt"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install the Cloudflare IP ranges helper
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/cloudflare-ip-ranges.py') }}"
+    dest: /usr/local/libexec/opnform-cloudflare-ip-ranges
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the origin firewall command
+  ansible.builtin.template:
+    src: origin-firewall.sh.j2
+    dest: /usr/local/sbin/opnform-cloudflare-origin-firewall
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the Cloudflare IP sync command
+  ansible.builtin.template:
+    src: cloudflare-ip-sync.sh.j2
+    dest: /usr/local/sbin/opnform-cloudflare-ip-sync
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the origin firewall systemd unit
+  ansible.builtin.template:
+    src: opnform-cloudflare-origin-firewall.service.j2
+    dest: /etc/systemd/system/opnform-cloudflare-origin-firewall.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: cloudflare_origin_lock reload systemd
+
+- name: Install the Cloudflare IP sync systemd unit
+  ansible.builtin.template:
+    src: opnform-cloudflare-ip-sync.service.j2
+    dest: /etc/systemd/system/opnform-cloudflare-ip-sync.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: cloudflare_origin_lock reload systemd
+
+- name: Install the Cloudflare IP sync timer
+  ansible.builtin.template:
+    src: opnform-cloudflare-ip-sync.timer.j2
+    dest: /etc/systemd/system/opnform-cloudflare-ip-sync.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify: cloudflare_origin_lock reload systemd
+
+- name: Install the Cloudflare IP sync environment defaults
+  ansible.builtin.template:
+    src: opnform-cloudflare-ip-sync.default.j2
+    dest: /etc/default/opnform-cloudflare-ip-sync
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Flush handlers so unit files are known before initialize
+  ansible.builtin.meta: flush_handlers
+
+- name: Initialize origin-lock state and Caddy gate snippet
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/opnform-cloudflare-origin-firewall
+      - initialize
+  changed_when: true
+
+- name: Leave the origin firewall unit installed but disabled
+  ansible.builtin.systemd:
+    name: opnform-cloudflare-origin-firewall.service
+    enabled: false
+    state: stopped
+    daemon_reload: true
+
+- name: Leave the Cloudflare IP sync timer installed but disabled
+  ansible.builtin.systemd:
+    name: opnform-cloudflare-ip-sync.timer
+    enabled: false
+    state: stopped
+    daemon_reload: true

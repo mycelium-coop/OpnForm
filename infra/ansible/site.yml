@@ -8,6 +8,8 @@
       tags: [host_hardening]
     - role: docker_engine
       tags: [docker_engine]
+    - role: cloudflare_origin_lock
+      tags: [cloudflare_origin_lock]
     - role: caddy
       tags: [caddy]
     - role: opnform

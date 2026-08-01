@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict OpnForm web origin ingress to Cloudflare networks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=OPNFORM_SSH_PORT={{ opnform_ssh_port }}
+EnvironmentFile=-/etc/default/opnform-cloudflare-origin-firewall
+ExecStart=/usr/local/sbin/opnform-cloudflare-origin-firewall apply
+ExecStop=/usr/local/sbin/opnform-cloudflare-origin-firewall disable
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

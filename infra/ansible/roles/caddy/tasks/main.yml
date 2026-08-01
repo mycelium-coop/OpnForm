@@ -14,13 +14,18 @@
   ansible.builtin.import_tasks: install.yml
   when: not opnform_caddy_existing | bool
 
-- name: Read installed Caddy version
+- name: Install the custom Caddy binary with Cloudflare DNS-01 support
+  ansible.builtin.import_tasks: custom_binary.yml
+
+- name: Read installed custom Caddy version
   ansible.builtin.command:
-    argv: [caddy, version]
+    argv:
+      - "{{ opnform_caddy_custom_binary }}"
+      - version
   register: opnform_caddy_installed_version
   changed_when: false
 
-- name: Require native Caddy v2
+- name: Require native Caddy v2, hostname, and email
   ansible.builtin.assert:
     that:
       - opnform_caddy_installed_version.stdout is search('v?2\\.')
@@ -48,16 +53,33 @@
       - "(opnform_caddy_service_name ~ '.service') in ansible_facts.services"
     fail_msg: "{{ opnform_caddy_service_name }}.service is required; containerized and custom Caddy launchers are unsupported."
 
+- name: Ensure the Cloudflare gate snippet exists before validation
+  ansible.builtin.stat:
+    path: "{{ opnform_cloudflare_gate_snippet }}"
+  register: opnform_cloudflare_gate_stat
+  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
+
+- name: Require the Cloudflare gate snippet for origin lockdown
+  ansible.builtin.assert:
+    that:
+      - opnform_cloudflare_gate_stat.stat.exists
+    fail_msg: >-
+      Missing {{ opnform_cloudflare_gate_snippet }}. The cloudflare_origin_lock
+      role must run before Caddy site configuration when origin lockdown is enabled.
+  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
+
 - name: Validate existing Caddy configuration before changes
   ansible.builtin.command:
     argv:
-      - caddy
+      - "{{ opnform_caddy_custom_binary }}"
       - validate
       - --config
       - "{{ opnform_caddy_config_path }}"
       - --adapter
       - caddyfile
   changed_when: false
+  environment:
+    CLOUDFLARE_DNS_API_TOKEN: "{{ opnform_caddy_dns_api_token }}"
 
 - name: Check for a conflicting OpnForm hostname in unmanaged Caddy snippets
   ansible.builtin.command:
@@ -77,32 +99,6 @@
     that:
       - opnform_caddy_hostname_conflict.rc != 0
     fail_msg: "{{ opnform_hostname }} already appears in unmanaged Caddy configuration; resolve it before deployment."
-
-- name: Fetch Cloudflare IPv4 address ranges
-  ansible.builtin.uri:
-    url: https://www.cloudflare.com/ips-v4
-    return_content: true
-    status_code: 200
-  register: opnform_cloudflare_ipv4_response
-  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
-
-- name: Fetch Cloudflare IPv6 address ranges
-  ansible.builtin.uri:
-    url: https://www.cloudflare.com/ips-v6
-    return_content: true
-    status_code: 200
-  register: opnform_cloudflare_ipv6_response
-  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
-
-- name: Set Cloudflare proxy ranges
-  ansible.builtin.set_fact:
-    opnform_cloudflare_proxy_ranges: "{{ (opnform_cloudflare_ipv4_response.content.splitlines() + opnform_cloudflare_ipv6_response.content.splitlines()) | reject('equalto', '') | list }}"
-  when: opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool
-
-- name: Set empty proxy ranges when Cloudflare origin lockdown is disabled
-  ansible.builtin.set_fact:
-    opnform_cloudflare_proxy_ranges: []
-  when: not (opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool)
 
 - name: Create Caddy snippet and backup directories
   ansible.builtin.file:
@@ -169,13 +165,15 @@
     - name: Validate staged Caddy configuration
       ansible.builtin.command:
         argv:
-          - caddy
+          - "{{ opnform_caddy_custom_binary }}"
           - validate
           - --config
           - "{{ opnform_caddy_config_path }}"
           - --adapter
           - caddyfile
       changed_when: false
+      environment:
+        CLOUDFLARE_DNS_API_TOKEN: "{{ opnform_caddy_dns_api_token }}"
 
     - name: Reload validated Caddy configuration
       ansible.builtin.service:
