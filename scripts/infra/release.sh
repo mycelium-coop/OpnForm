@@ -68,8 +68,36 @@ build_image() {
   docker buildx build "${action_args[@]}" "${root}"
 }
 
+# Provenance/SBOM attestations require the docker-container driver.
+# Docker Desktop's default builder uses the docker driver and fails with:
+# "Attestation is not supported for the docker driver."
+ensure_attestation_builder() {
+  local builder_name="opnform-release"
+  local driver=""
+
+  if docker buildx inspect "${builder_name}" >/dev/null 2>&1; then
+    driver="$(docker buildx inspect "${builder_name}" --format '{{.Driver}}' 2>/dev/null || true)"
+    if [[ "${driver}" != "docker-container" ]]; then
+      printf 'Builder %s exists but uses driver %s; expected docker-container.\n' \
+        "${builder_name}" "${driver:-unknown}" >&2
+      exit 1
+    fi
+    docker buildx use "${builder_name}" >/dev/null
+    docker buildx inspect --bootstrap "${builder_name}" >/dev/null
+  else
+    docker buildx create \
+      --name "${builder_name}" \
+      --driver docker-container \
+      --bootstrap \
+      --use >/dev/null
+  fi
+  export BUILDX_BUILDER="${builder_name}"
+}
+
 build_local() {
   release_check
+  preserve_docker_host
+  ensure_attestation_builder
   build_image "${root}/docker/Dockerfile.api" "${api_tag}" false
   build_image "${root}/docker/Dockerfile.client" "${client_tag}" false
   trivy image --exit-code 1 --severity HIGH,CRITICAL "${api_tag}"
@@ -103,6 +131,8 @@ publish_images() {
   docker_config="$(mktemp -d)"
   trap 'rm -rf "${docker_config:-}"' EXIT
   printf '%s' "${GHCR_PUSH_TOKEN}" | DOCKER_CONFIG="${docker_config}" docker login "${GHCR_HOST}" --username "${GHCR_PUSH_USERNAME}" --password-stdin >/dev/null
+  # Isolated DOCKER_CONFIG has no Buildx builders; create one that supports attestations.
+  DOCKER_CONFIG="${docker_config}" ensure_attestation_builder
   DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.api" "${api_tag}" true
   DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.client" "${client_tag}" true
 

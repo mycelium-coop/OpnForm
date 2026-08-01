@@ -54,7 +54,9 @@ verify OpenTofu **1.12.5** after install (`tofu version`). Confirm
 `docker info` works before releasing. Docker Desktop on macOS often uses
 `~/.docker/run/docker.sock` via the `desktop-linux` context rather than
 `/var/run/docker.sock`; `just release` preserves that endpoint when it uses an
-isolated Docker config for GHCR login.
+isolated Docker config for GHCR login. Release builds also create a
+`docker-container` Buildx builder (`opnform-release`) because provenance/SBOM
+attestations are not supported by Desktop’s default `docker` driver.
 
 Accounts and resources:
 
