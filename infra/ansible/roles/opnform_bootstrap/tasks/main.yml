@@ -70,7 +70,8 @@
 
     - name: Set the initial workspace ID
       ansible.builtin.set_fact:
-        opnform_bootstrap_workspace_id: "{{ opnform_bootstrap_workspaces.json.data[0].id }}"
+        # WorkspaceResource::collection is unwrapped (JsonResource::withoutWrapping).
+        opnform_bootstrap_workspace_id: "{{ opnform_bootstrap_workspaces.json[0].id }}"
       no_log: true
 
     - name: Configure the initial OIDC connection
@@ -163,7 +164,8 @@
 
     - name: Set the existing workspace ID
       ansible.builtin.set_fact:
-        opnform_existing_workspace_id: "{{ opnform_existing_workspaces.json.data[0].id }}"
+        # WorkspaceResource::collection is unwrapped (JsonResource::withoutWrapping).
+        opnform_existing_workspace_id: "{{ opnform_existing_workspaces.json[0].id }}"
       no_log: true
 
     - name: Get the existing workspace OIDC connection
