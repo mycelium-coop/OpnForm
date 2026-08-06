@@ -160,6 +160,10 @@ backup-check:
 restore snapshot:
     @scripts/infra/ansible.sh restore {{ snapshot }}
 
+# Enable or disable Google Sheets on the VPS from GOOGLE_SHEETS_* in .env.
+google-sheets:
+    @scripts/infra/google-sheets.sh apply
+
 # Install Cloudflare origin-lock assets (firewall unit left disabled).
 origin-lock-install:
     @scripts/infra/origin-lock.sh install

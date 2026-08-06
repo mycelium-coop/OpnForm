@@ -33,6 +33,16 @@
     reauthorize: true
   no_log: true
 
+- name: Require Google OAuth credentials when Google Sheets is enabled
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'GOOGLE_CLIENT_ID') | length > 0
+      - lookup('ansible.builtin.env', 'GOOGLE_CLIENT_SECRET') | length > 0
+    fail_msg: >-
+      GOOGLE_SHEETS_ENABLED is true but GOOGLE_CLIENT_ID and/or
+      GOOGLE_CLIENT_SECRET are empty.
+  when: lookup('ansible.builtin.env', 'GOOGLE_SHEETS_ENABLED') | default('false') | bool
+
 - name: Render OpnForm API environment
   ansible.builtin.template:
     src: api.env.j2
@@ -90,3 +100,10 @@
       - --quiet
   changed_when: false
   no_log: true
+
+# never: skipped on full deploy; only runs with --tags google_sheets.
+- name: Apply Google Sheets integration environment
+  ansible.builtin.import_tasks: google_sheets.yml
+  tags:
+    - google_sheets
+    - never
