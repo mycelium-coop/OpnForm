@@ -388,6 +388,27 @@ even if OIDC will take over afterward.
 | `bootstrap-admin-email` | Email for the first administrator |
 | `bootstrap-admin-password` | Password for the first administrator |
 
+### Google Sheets (optional)
+
+Disabled by default (`GOOGLE_SHEETS_ENABLED=false`). When enabled, both OAuth
+client fields are required and are injected into the API container env. The app
+turns the Google Sheets integration on when those credentials are present.
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `google-client-id` | Google OAuth Client ID | [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials → OAuth 2.0 Client ID (Web application). Enable the Google Drive and Google Sheets APIs. Add `https://<opnform-hostname>` as an authorized JavaScript origin. |
+| `google-client-secret` | Google OAuth Client Secret | Shown with the OAuth client. Leave redirect URIs empty; OpnForm generates them from the hostname. |
+
+See the [OAuth Integration Setup](https://docs.opnform.com/configuration/oauth-setup) guide for the full Google Cloud steps. After updating `.env`, apply with:
+
+```sh
+CONFIRM_PROD=opnform-prod just google-sheets
+```
+
+That re-renders `/opt/opnform/secrets/api.env` and recreates the API containers.
+Full `just deploy` / `just release` also honor the toggle when rendering `api.env`.
+To disable, set `GOOGLE_SHEETS_ENABLED=false` and run `just google-sheets` again.
+
 ### OIDC (optional but enabled by default)
 
 `.env.example` sets `OIDC_ENABLED=true` and `OIDC_FORCE_LOGIN=true`. Leave both
@@ -448,6 +469,7 @@ These values are not injected from 1Password (or are safe defaults in
 | `CLOUDFLARE_MANAGE_SSL_SETTING` | Default `false`. When `true`, OpenTofu sets the zone SSL mode to `strict`. |
 | `OIDC_ENABLED` / `OIDC_FORCE_LOGIN` | See OIDC section. Force login disables password auth after an OIDC connection exists. |
 | `OIDC_*_JSON` | Must remain valid JSON strings. |
+| `GOOGLE_SHEETS_ENABLED` | Default `false`. When `true`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are required; apply with `just google-sheets`. |
 | `OPNFORM_DOCKER_SUBNET` / `OPNFORM_INGRESS_IP` | Must not collide with other Docker networks on the host. |
 | `IMAGE_PLATFORM` | Default `linux/amd64`; must match the VPS architecture. |
 | `BACKUP_*` | systemd timer schedule and restic retention. |
@@ -700,6 +722,7 @@ just ssh
 just smoke
 just releases
 just origin-lock-status
+CONFIRM_PROD=opnform-prod just google-sheets
 CONFIRM_PROD=opnform-prod just backup
 just backup-check
 CONFIRM_PROD=opnform-prod just rollback sha-<40-character-commit>
@@ -736,6 +759,7 @@ Must equal `DEPLOYMENT_NAME`:
 - `origin-lock-sync-install`, `origin-lock-sync-run`, `origin-lock-sync-enable`,
   `origin-lock-sync-disable`, `origin-lock-approve-removals`,
   `origin-lock-rollback-ranges`
+- `google-sheets`
 
 Plan, inventory, smoke, status, logs, backup-check, `origin-lock-status`,
 `origin-block-check`, and `ips-refresh` do not require it.

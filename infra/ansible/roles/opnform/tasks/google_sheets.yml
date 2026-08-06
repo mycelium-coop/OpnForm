@@ -1,0 +1,56 @@
+---
+# Apply Google Sheets OAuth credentials to the running API stack.
+# Tagged never so full deploys skip the force-recreate; invoke with
+# --tags google_sheets (see `just google-sheets`).
+
+- name: Require an existing OpnForm release before Google Sheets apply
+  ansible.builtin.stat:
+    path: "{{ opnform_compose_file }}"
+  register: opnform_google_sheets_compose
+
+- name: Fail when Google Sheets apply runs before the first release
+  ansible.builtin.assert:
+    that:
+      - opnform_google_sheets_compose.stat.exists
+    fail_msg: >-
+      {{ opnform_compose_file }} is missing. Deploy a release first
+      (just release or just deploy), then run just google-sheets.
+
+- name: Require Google OAuth credentials when Google Sheets is enabled
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'GOOGLE_CLIENT_ID') | length > 0
+      - lookup('ansible.builtin.env', 'GOOGLE_CLIENT_SECRET') | length > 0
+    fail_msg: >-
+      GOOGLE_SHEETS_ENABLED is true but GOOGLE_CLIENT_ID and/or
+      GOOGLE_CLIENT_SECRET are empty.
+  when: lookup('ansible.builtin.env', 'GOOGLE_SHEETS_ENABLED') | default('false') | bool
+
+- name: Render OpnForm API environment for Google Sheets toggle
+  ansible.builtin.template:
+    src: api.env.j2
+    dest: "{{ opnform_project_dir }}/secrets/api.env"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Recreate API containers to load Google Sheets environment
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ opnform_compose_file }}"
+      - up
+      - -d
+      - --force-recreate
+      - --no-deps
+      - --wait
+      - --wait-timeout
+      - '300'
+      - api
+      - api-worker
+      - api-scheduler
+  changed_when: true
