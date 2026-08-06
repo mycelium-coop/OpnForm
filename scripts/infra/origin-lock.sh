@@ -102,6 +102,10 @@ case "${action}" in
     require_inventory
     remote_sudo "$(cat <<'EOF'
 set -euo pipefail
+if [[ ! -f /etc/systemd/system/opnform-cloudflare-origin-firewall.service ]]; then
+  printf '%s\n' 'Origin-lock unit is not installed. Run: CONFIRM_PROD=<DEPLOYMENT_NAME> just origin-lock-install' >&2
+  exit 1
+fi
 systemctl enable --now opnform-cloudflare-origin-firewall.service
 /usr/local/sbin/opnform-cloudflare-origin-firewall verify
 EOF

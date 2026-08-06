@@ -152,6 +152,8 @@
         group: root
         mode: '0644'
 
+    # Only seed maintenance on first site install. Re-running the caddy role on a
+    # live host must not flip maintenance back on (bootstrap/release own that file).
     - name: Render initial OpnForm maintenance mode
       ansible.builtin.template:
         src: maintenance.caddy.j2
@@ -161,6 +163,7 @@
         mode: '0644'
       vars:
         opnform_maintenance_enabled: true
+      when: not opnform_caddy_site_stat.stat.exists
 
     - name: Validate staged Caddy configuration
       ansible.builtin.command:
