@@ -18,6 +18,7 @@ client/.env
 .env.*
 api/.env.*
 client/.env.*
+/scripts/form-migration.env
 !.env.example
 !api/.env.example
 !client/.env.example
@@ -38,3 +39,7 @@ client/.env.*
 /infra/ansible/.cache/
 /infra/ansible/.collections/
 /infra/ansible/.venv/
+
+# Python bytecode caches
+__pycache__/
+*.pyc

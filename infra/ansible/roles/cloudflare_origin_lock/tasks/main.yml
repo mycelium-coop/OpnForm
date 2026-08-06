@@ -101,6 +101,26 @@
 - name: Flush handlers so unit files are known before initialize
   ansible.builtin.meta: flush_handlers
 
+- name: Record whether the origin firewall was already enabled
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-enabled
+      - opnform-cloudflare-origin-firewall.service
+  register: opnform_cf_fw_enabled_before
+  changed_when: false
+  failed_when: false
+
+- name: Record whether the origin firewall was already active
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - opnform-cloudflare-origin-firewall.service
+  register: opnform_cf_fw_active_before
+  changed_when: false
+  failed_when: false
+
 - name: Initialize origin-lock state and Caddy gate snippet
   ansible.builtin.command:
     argv:
@@ -108,12 +128,24 @@
       - initialize
   changed_when: true
 
+# First install leaves enforcement off until `just origin-lock-enable`. Re-running
+# sync-install / the role must not disable a lock the operator already enabled.
 - name: Leave the origin firewall unit installed but disabled
   ansible.builtin.systemd:
     name: opnform-cloudflare-origin-firewall.service
     enabled: false
     state: stopped
     daemon_reload: true
+  when:
+    - opnform_cf_fw_enabled_before.stdout != 'enabled'
+    - opnform_cf_fw_active_before.stdout != 'active'
+
+- name: Reload systemd after origin-lock unit updates when firewall stays enabled
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: >-
+    opnform_cf_fw_enabled_before.stdout == 'enabled'
+    or opnform_cf_fw_active_before.stdout == 'active'
 
 - name: Leave the Cloudflare IP sync timer installed but disabled
   ansible.builtin.systemd:
