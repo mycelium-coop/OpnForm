@@ -284,7 +284,7 @@ One R2 backup bucket holds two restic repositories:
 | --- | --- | --- |
 | `deploy-ssh-public-key-path` | Absolute path to the deploy public key on the controller | Generate an ed25519 keypair for this deployment (`ssh-keygen -t ed25519 -f ~/.ssh/opnform-deploy -C opnform-deploy`). Store the public key path, for example `/Users/you/.ssh/opnform-deploy.pub`. |
 | `deploy-ssh-private-key-path` | Absolute path to the matching private key | Same keypair's private key path. Ansible and `just ssh` use this key. Keep the private key only on the controller filesystem; do not paste the key material into 1Password unless your policy requires it. |
-| `ssh-allowed-cidrs` | CIDRs allowed to reach SSH when UFW is enabled | Comma-separated CIDRs for operator networks, for example `203.0.113.10/32,198.51.100.0/24`. Required in new-VPS mode; wrong CIDRs can lock you out after the first Ansible run. |
+| `ssh-allowed-cidrs` | CIDRs allowed to reach SSH when UFW is enabled | Comma-separated CIDRs for operator networks, for example `203.0.113.10/32,198.51.100.0/24`. Required in new-VPS mode; wrong CIDRs can lock you out after the first Ansible run. After deploy, live UFW changes are manual (SSH or [OVH KVM console](#update-ssh-allowed-ips-ovh-kvm-console)); updating this field alone does not rewrite host rules in `existing` mode. |
 | `ovh-ssh-password` | KVM/console break-glass password | Created automatically by `just env` or deploy when missing (not by `just ansible-check`). Used for local console login only; SSH password authentication stays disabled. Do not rotate casually — regenerating requires updating the host password again via deploy. |
 
 In create mode, OpenTofu installs the public key for the image's default admin
@@ -732,6 +732,52 @@ CONFIRM_PROD=opnform-prod just restore <restic-snapshot-id>
 Optional validation helpers: `just fmt-check`, `just validate`,
 `just security-scan` (needs Checkov and Trivy), `just ansible-lint`,
 `just ansible-syntax`, and `just ansible-check`.
+
+### Update SSH-allowed IPs (OVH KVM console)
+
+UFW SSH allow rules are applied only when `VPS_MODE=create`. After you switch
+to `existing`, changing `ssh-allowed-cidrs` / `SSH_ALLOWED_CIDRS` and
+redeploying does **not** update the live firewall. Ansible also only **adds**
+CIDRs; it never removes stale ones. Keep the 1Password field accurate for
+documentation and future create-mode runs, but manage live access on the host.
+
+If you still have SSH from an allowed network, update UFW there and skip the
+console. Use the OVH KVM console when your current public IP is not in
+`SSH_ALLOWED_CIDRS` and you cannot reach the VPS over SSH.
+
+1. Look up `ovh-ssh-password` in `tech-admin` / `opnform-secrets`. Confirm
+   `SSH_PORT` from `.env` (default `22`).
+2. In the [OVHcloud Control Panel](https://www.ovh.com/manager/), open
+   **Bare Metal Cloud** → **Virtual private servers** → your VPS.
+3. On **General information**, open the `…` menu next to the VPS name and
+   choose **KVM** (opens in a browser popup; use **Open in a new window** if
+   needed). See OVH’s
+   [KVM console guide](https://help.ovhcloud.com/csm/en-gb-vps-use-kvm?id=kb_article_view&sysparm_article=KB0047769).
+4. Log in locally as `DEPLOY_USER` (default `opnform`) or `ANSIBLE_SSH_USER`
+   (default `ubuntu`) with `ovh-ssh-password`. SSH password auth stays
+   disabled; this password is for console login only. Type a few characters
+   first — the KVM keyboard layout may not match yours.
+5. Add your current public IP (use `/32` for a single address), optionally
+   remove the old rule, and confirm:
+
+```sh
+sudo ufw status numbered
+sudo ufw allow from NEW.IP.ADDR.ESS/32 to any port 22 proto tcp
+# optional: sudo ufw delete allow from OLD.IP.ADDR.ESS/32 to any port 22 proto tcp
+sudo ufw status
+```
+
+Replace `22` with `SSH_PORT` if you changed it. Prefer allowing a stable
+egress CIDR (office VPN, travel VPN, or jump host) instead of a single home
+`/32` when your ISP rotates addresses often.
+6. From your workstation, verify `just ssh` (or an equivalent key-based SSH
+   session) works, then update `ssh-allowed-cidrs` in 1Password and re-run
+   `just env` so the local `.env` matches.
+
+If the console password is wrong or the OS login is broken, use OVH **rescue
+mode** instead of KVM: boot rescue, mount the disk, fix UFW (or temporarily
+`ufw disable`), then reboot back to the normal OS. Do not disable UFW longer
+than needed, and do not leave SSH open to `0.0.0.0/0`.
 
 ### Rollback vs restore
 

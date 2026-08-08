@@ -88,7 +88,7 @@ ensure_ovh_ssh_password() {
     return 0
   fi
 
-  password="$(openssl rand -base64 48 | tr -d '\n')"
+  password="$(openssl rand -base64 24 | tr -d '\n')"
   template="$(mktemp)"
   chmod 600 "${template}"
 
