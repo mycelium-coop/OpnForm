@@ -41,7 +41,18 @@ case "${action}" in
       printf 'Applying Google Sheets integration (disabled; credentials omitted from api.env).\n'
     fi
     (cd "${ansible_root}" && uv run --locked -- ansible-playbook site.yml --tags google_sheets)
-    "${root}/scripts/infra/smoke.sh"
+    # Public smoke can lag briefly after ingress recreate; retry a few times.
+    attempt=1
+    max_attempts=6
+    until "${root}/scripts/infra/smoke.sh"; do
+      if ((attempt >= max_attempts)); then
+        printf 'Smoke checks failed after %s attempts.\n' "${max_attempts}" >&2
+        exit 1
+      fi
+      printf 'Smoke check not ready yet (attempt %s/%s); retrying in 5s...\n' "${attempt}" "${max_attempts}"
+      sleep 5
+      attempt=$((attempt + 1))
+    done
     ;;
   *)
     printf 'Unknown action: %s\n' "${action}" >&2

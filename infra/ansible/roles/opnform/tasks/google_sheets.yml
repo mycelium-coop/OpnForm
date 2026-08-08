@@ -54,3 +54,21 @@
       - api-worker
       - api-scheduler
   changed_when: true
+
+# Ingress nginx resolves api:9000 at start; recreate so it learns the new API IP.
+- name: Recreate ingress so nginx re-resolves the API upstream
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ opnform_compose_file }}"
+      - up
+      - -d
+      - --force-recreate
+      - --no-deps
+      - --wait
+      - --wait-timeout
+      - '120'
+      - ingress
+  changed_when: true
