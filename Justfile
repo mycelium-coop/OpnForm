@@ -108,7 +108,7 @@ deploy:
 smoke:
     @scripts/infra/smoke.sh
 
-# Validate the current commit before building a release.
+# Validate the current commit before building a release. SKIP_TESTS=1 skips Pest.
 release-check:
     @scripts/infra/release.sh check
 
@@ -124,7 +124,7 @@ publish:
 deploy-release release:
     @scripts/infra/release.sh deploy {{ release }}
 
-# Build, push, and deploy the current clean commit.
+# Build, push, and deploy the current clean commit. SKIP_TESTS=1 skips Pest.
 release:
     @scripts/infra/release.sh release
 
