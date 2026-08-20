@@ -34,6 +34,8 @@ Controller tools:
   - `(cd api && composer install)` — provides `vendor/autoload.php` and Pest
   - Release checks copy `api/.env.example` to `api/.env` when missing (same as
     CI) and clear stale `bootstrap/cache` route/event caches before Pest runs
+  - `SKIP_TESTS=1` skips Pest while still running lint and the dirty-tree
+    check (`just release`, `just release-check`, `just build`, `just publish`)
 - Python 3.12, Ansible 13.5.0, linting, Molecule, and their transitive Python
   dependencies are managed from `infra/ansible/pyproject.toml` and the
   committed `uv.lock`.
@@ -601,6 +603,16 @@ That command:
 4. Pushes to GHCR and writes `.deploy/releases/sha-<40-char-commit>.env`.
 5. Runs Ansible `site.yml` (host prep, Caddy, compose release, bootstrap).
 6. Runs smoke checks against `https://$OPNFORM_HOSTNAME`.
+
+To skip Pest while still running lint and refusing a dirty worktree (also
+honored by `just release-check`, `just build`, and `just publish`):
+
+```sh
+SKIP_TESTS=1 CONFIRM_PROD=opnform-prod just release
+```
+
+Do not put `SKIP_TESTS=1` in `.env`; pass it on the command line for a
+one-shot override.
 
 Partial path if you want to separate publish from deploy:
 
