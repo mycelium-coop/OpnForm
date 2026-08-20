@@ -1,4 +1,4 @@
 ---
-- name: cloudflare_origin_lock reload systemd
+- name: Cloudflare origin lock | Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true

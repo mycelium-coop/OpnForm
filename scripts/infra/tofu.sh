@@ -231,6 +231,10 @@ case "${action}" in
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     snapshot="${snapshot_dir}/production-${timestamp}.tfstate"
     snapshot_error="${snapshot}.error"
+    # A direct `just state-snapshot` starts in a fresh process, so map the
+    # dedicated R2 state credentials before asking the cached S3 backend to
+    # pull state. The backup credentials are exported only after the pull.
+    export_r2_state_backend_env
     if ! tofu -chdir="${directory}" state pull >"${snapshot}" 2>"${snapshot_error}"; then
       if grep -q 'No state file was found' "${snapshot_error}"; then
         rm -f "${snapshot}" "${snapshot_error}"

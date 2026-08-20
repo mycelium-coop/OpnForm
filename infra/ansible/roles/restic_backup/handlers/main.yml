@@ -1,4 +1,4 @@
 ---
-- name: restic_backup reload systemd
+- name: Restic backup | Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true

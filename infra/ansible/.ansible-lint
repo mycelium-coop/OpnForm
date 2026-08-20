@@ -1,0 +1,6 @@
+---
+# Roles intentionally share the public opnform_* variable namespace so values
+# can flow between orchestration roles without duplicate aliases. Enforce every
+# other basic-profile rule while excluding only the directory-prefix sub-rule.
+skip_list:
+  - var-naming[no-role-prefix]

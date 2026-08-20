@@ -10,13 +10,12 @@
 
 - name: Download Caddy binary with the Cloudflare DNS plugin
   ansible.builtin.get_url:
-    url: >-
-      https://caddyserver.com/api/download?os=linux&arch={{ opnform_caddy_download_arch }}&version={{ opnform_caddy_custom_version }}&p=github.com/caddy-dns/cloudflare
+    url: "{{ opnform_caddy_download_url }}"
     dest: "{{ opnform_caddy_custom_binary }}.tmp"
     owner: root
     group: root
     mode: '0755'
-    force: true
+    checksum: "sha256:{{ opnform_caddy_custom_checksums[opnform_caddy_download_arch] }}"
     timeout: 120
 
 - name: Install the custom Caddy binary atomically
@@ -71,7 +70,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: caddy reload systemd
+  notify: Caddy | Reload systemd
 
 - name: Render the Caddy DNS environment file
   ansible.builtin.template:
@@ -82,7 +81,7 @@
     mode: '0640'
   no_log: true
   diff: false
-  notify: caddy reload systemd
+  notify: Caddy | Reload systemd
 
 - name: Flush Caddy handlers before using the custom binary
   ansible.builtin.meta: flush_handlers

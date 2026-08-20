@@ -1,4 +1,4 @@
 ---
-- name: caddy reload systemd
+- name: Caddy | Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true

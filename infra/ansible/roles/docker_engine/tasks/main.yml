@@ -26,7 +26,11 @@
 
 - name: Configure Docker APT repository
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ ansible_facts.architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ opnform_docker_apt_distribution }} {{ ansible_facts.distribution_release }} stable"
+    repo: >-
+      deb [arch={{ ansible_facts.architecture | replace('x86_64', 'amd64') |
+      replace('aarch64', 'arm64') }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/{{ opnform_docker_apt_distribution }}
+      {{ ansible_facts.distribution_release }} stable
     filename: docker
     state: present
 

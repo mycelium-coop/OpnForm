@@ -85,6 +85,8 @@ FORM_WRITABLE_FIELDS = (
     "auto_focus",
     "enable_partial_submissions",
     "enable_ip_tracking",
+    "submission_retention_value",
+    "submission_retention_unit",
     "properties",
     "computed_variables",
     "can_be_indexed",

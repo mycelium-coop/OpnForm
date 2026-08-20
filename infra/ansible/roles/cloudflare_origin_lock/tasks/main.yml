@@ -70,7 +70,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: cloudflare_origin_lock reload systemd
+  notify: Cloudflare origin lock | Reload systemd
 
 - name: Install the Cloudflare IP sync systemd unit
   ansible.builtin.template:
@@ -79,7 +79,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: cloudflare_origin_lock reload systemd
+  notify: Cloudflare origin lock | Reload systemd
 
 - name: Install the Cloudflare IP sync timer
   ansible.builtin.template:
@@ -88,7 +88,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: cloudflare_origin_lock reload systemd
+  notify: Cloudflare origin lock | Reload systemd
 
 - name: Install the Cloudflare IP sync environment defaults
   ansible.builtin.template:
