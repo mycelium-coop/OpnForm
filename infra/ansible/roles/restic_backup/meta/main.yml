@@ -2,5 +2,6 @@
 galaxy_info:
   author: OpnForm
   description: Installs encrypted R2 restic backups and a systemd timer.
+  license: AGPL-3.0-only
   min_ansible_version: '2.20'
 dependencies: []

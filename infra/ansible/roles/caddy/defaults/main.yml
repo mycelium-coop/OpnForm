@@ -10,7 +10,18 @@ opnform_hostname: ''
 opnform_maintenance_file: /etc/caddy/opnform-maintenance.caddy
 opnform_caddy_dns_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_DNS_API_TOKEN', default='') }}"
 opnform_caddy_custom_version: 'v2.10.0'
+opnform_caddy_cloudflare_plugin_version: 'v0.2.4'
+opnform_caddy_custom_checksums:
+  amd64: 02d058c1bcd1d85700b953666dad2a28a99bc03224549ab952ef062a419ab8e4
+  arm64: fb5688b8a26a6f75503398f06f6eb17a7209f98c3ebfa1eb0a378bd19472c43c
 opnform_caddy_custom_binary: /usr/local/bin/caddy-opnform
 opnform_caddy_env_file: /etc/caddy/opnform.env
 opnform_cloudflare_gate_snippet: /var/lib/opnform-cloudflare-origin-firewall/caddy/opnform-cloudflare-gate.caddy
 opnform_caddy_download_arch: "{{ 'arm64' if (lookup('ansible.builtin.env', 'IMAGE_PLATFORM', default='linux/amd64') | trim) == 'linux/arm64' else 'amd64' }}"
+opnform_caddy_download_url: >-
+  {{
+    'https://caddyserver.com/api/download?' ~
+    'os=linux&arch=' ~ opnform_caddy_download_arch ~
+    '&version=' ~ opnform_caddy_custom_version ~
+    '&p=github.com/caddy-dns/cloudflare@' ~ opnform_caddy_cloudflare_plugin_version
+  }}

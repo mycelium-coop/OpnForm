@@ -57,7 +57,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: restic_backup reload systemd
+  notify: Restic backup | Reload systemd
 
 - name: Install the OpnForm backup timer
   ansible.builtin.template:
@@ -66,7 +66,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: restic_backup reload systemd
+  notify: Restic backup | Reload systemd
 
 - name: Enable the OpnForm backup timer
   ansible.builtin.systemd:

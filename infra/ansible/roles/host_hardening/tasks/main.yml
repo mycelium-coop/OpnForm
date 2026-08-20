@@ -76,7 +76,7 @@
     group: root
     mode: '0644'
     validate: /usr/sbin/sshd -t -f %s
-  notify: host_hardening restart ssh
+  notify: Host hardening | Restart SSH
 
 - name: Enable fail2ban
   ansible.builtin.service:

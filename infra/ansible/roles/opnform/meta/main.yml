@@ -2,5 +2,6 @@
 galaxy_info:
   author: OpnForm
   description: Renders isolated OpnForm release bundles and secure runtime configuration.
+  license: AGPL-3.0-only
   min_ansible_version: '2.20'
 dependencies: []

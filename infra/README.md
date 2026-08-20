@@ -646,7 +646,11 @@ Two layers protect the origin:
 
 Caddy uses **DNS-01** via `caddy-dns/cloudflare` and
 `CLOUDFLARE_DNS_API_TOKEN`, so certificate renewal is outbound-only and does
-not require inbound Let's Encrypt access.
+not require inbound Let's Encrypt access. The custom binary pins both Caddy and
+the Cloudflare plugin and verifies an architecture-specific SHA-256 before
+installation. When either version changes, rebuild and review both `amd64` and
+`arm64` binaries, then update the versions and checksums together in
+`infra/ansible/roles/caddy/defaults/main.yml`.
 
 ### Rollout
 

@@ -2,5 +2,6 @@
 galaxy_info:
   author: OpnForm
   description: Cloudflare origin IP lock and range synchronizer for host Caddy.
+  license: AGPL-3.0-only
   min_ansible_version: '2.20'
 dependencies: []

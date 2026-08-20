@@ -141,6 +141,12 @@ class PayloadAndSelectionTests(unittest.TestCase):
         self.assertEqual(payload["workspace_id"], 88)
         self.assertEqual(payload["font_family"], "value-font_family")
         self.assertEqual(payload["computed_variables"], "value-computed_variables")
+        self.assertEqual(
+            payload["submission_retention_value"], "value-submission_retention_value"
+        )
+        self.assertEqual(
+            payload["submission_retention_unit"], "value-submission_retention_unit"
+        )
         for excluded in ("id", "slug", "custom_domain", "pdf_template_id", "views_count"):
             self.assertNotIn(excluded, payload)
         payload["properties"][0]["name"] = "Changed"
