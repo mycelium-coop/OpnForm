@@ -113,13 +113,15 @@
     - name: Validate the public Caddy configuration after bootstrap
       ansible.builtin.command:
         argv:
-          - caddy
+          - "{{ opnform_caddy_custom_binary }}"
           - validate
           - --config
           - "{{ opnform_caddy_config_path }}"
           - --adapter
           - caddyfile
       changed_when: false
+      environment:
+        CLOUDFLARE_DNS_API_TOKEN: "{{ opnform_caddy_dns_api_token }}"
 
     - name: Reload Caddy after bootstrap
       ansible.builtin.service:
