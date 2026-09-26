@@ -75,6 +75,10 @@ build_image() {
 
   if [[ "${push}" == "true" ]]; then
     action_args+=(--push)
+    # Separate repositories/platforms must not overwrite each other's cache.
+    local cache_ref="${image_tag%:*}:buildcache-${IMAGE_PLATFORM//\//-}"
+    action_args+=(--cache-from "type=registry,ref=${cache_ref}")
+    action_args+=(--cache-to "type=registry,ref=${cache_ref},mode=max,ignore-error=true")
   else
     action_args+=(--load)
   fi
@@ -144,10 +148,12 @@ publish_images() {
   require_command jq
   local docker_config=""
   preserve_docker_host
+  # Keep builder registration outside the temporary registry credentials config.
+  export BUILDX_CONFIG="${BUILDX_CONFIG:-${DOCKER_CONFIG:-${HOME}/.docker}/buildx}"
   docker_config="$(mktemp -d)"
-  trap 'rm -rf "${docker_config:-}"' EXIT
+  trap "$(printf 'rm -rf -- %q' "${docker_config}")" EXIT
   printf '%s' "${GHCR_PUSH_TOKEN}" | DOCKER_CONFIG="${docker_config}" docker login "${GHCR_HOST}" --username "${GHCR_PUSH_USERNAME}" --password-stdin >/dev/null
-  # Isolated DOCKER_CONFIG has no Buildx builders; create one that supports attestations.
+  # Reuse the persistent builder and its local cache with isolated GHCR credentials.
   DOCKER_CONFIG="${docker_config}" ensure_attestation_builder
   DOCKER_CONFIG="${docker_config}" build_image "${root}/infra/docker/Dockerfile.api" "${api_tag}" true
   DOCKER_CONFIG="${docker_config}" build_image "${root}/infra/docker/Dockerfile.client" "${client_tag}" true

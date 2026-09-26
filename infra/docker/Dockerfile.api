@@ -15,29 +15,26 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the entire source code for proper installation
-COPY api/ .
-
-# Production builds install no development dependencies by default.
+# Install dependencies before copying source so application edits reuse vendor/.
+COPY api/composer.json api/composer.lock ./
 ARG COMPOSER_FLAGS="--no-dev --optimize-autoloader --no-interaction"
-RUN composer install ${COMPOSER_FLAGS} \
+RUN --mount=type=cache,target=/tmp/composer-cache \
+    COMPOSER_CACHE_DIR=/tmp/composer-cache composer install ${COMPOSER_FLAGS} \
+    --no-scripts --no-autoloader \
+    --ignore-platform-req=php \
+    --ignore-platform-req=ext-bcmath \
+    --ignore-platform-req=ext-gd
+
+# Run autoload generation and application scripts only after source is present.
+COPY api/ .
+RUN --mount=type=cache,target=/tmp/composer-cache \
+    COMPOSER_CACHE_DIR=/tmp/composer-cache composer install ${COMPOSER_FLAGS} \
     --ignore-platform-req=php \
     --ignore-platform-req=ext-bcmath \
     --ignore-platform-req=ext-gd
 
 # Final stage - smaller runtime image
 FROM php:8.3-fpm-alpine
-
-# Accept version build argument
-ARG APP_VERSION=unknown
-ARG VCS_REF=unknown
-ARG BUILD_DATE=unknown
-
-LABEL org.opencontainers.image.title="OpnForm API" \
-      org.opencontainers.image.source="https://github.com/OpnForm/OpnForm" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -87,13 +84,21 @@ RUN mkdir -p storage/framework/sessions \
 # Copy the entire application from the builder stage
 COPY --from=builder /app/ ./
 
-# Set version as environment variable
-ENV APP_VERSION_DOCKER=$APP_VERSION
-ENV APP_VCS_REF=$VCS_REF
-
 # Setup entrypoint
 COPY docker/php-fpm-entrypoint /usr/local/bin/opnform-entrypoint
 RUN chmod a+x /usr/local/bin/*
+
+# Declare changing metadata last to preserve package and PHP extension caches.
+ARG APP_VERSION=unknown
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="OpnForm API" \
+      org.opencontainers.image.source="https://github.com/OpnForm/OpnForm" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+ENV APP_VERSION_DOCKER=$APP_VERSION
+ENV APP_VCS_REF=$VCS_REF
 
 ENTRYPOINT ["/usr/local/bin/opnform-entrypoint"]
 CMD ["php-fpm"]

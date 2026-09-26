@@ -60,6 +60,30 @@ isolated Docker config for GHCR login. Release builds also create a
 `docker-container` Buildx builder (`opnform-release`) because provenance/SBOM
 attestations are not supported by Desktop’s default `docker` driver.
 
+Release caching:
+
+- Buildx configuration stays in `BUILDX_CONFIG` (or the original Docker config's
+  `buildx` directory), separate from the temporary GHCR login credentials. The
+  persistent `opnform-release` builder retains local layers and dependency caches.
+- `just publish` and `just release` import/export registry caches in each image
+  repository under `buildcache-linux-amd64` (or the corresponding
+  `IMAGE_PLATFORM` with slashes replaced by hyphens). `mode=max` retains
+  intermediate build stages. These mutable cache tags are separate from immutable
+  release tags and digest-pinned manifests; keep their package access restricted
+  like the images because the cache includes intermediate application source.
+- A missing registry cache is normal on the first build. Cache export failures
+  produce warnings rather than failing an otherwise successful image publish.
+- Composer dependencies are cached by their manifests; application autoloading
+  and Laravel scripts still run after source is copied. Composer/npm download
+  cache mounts persist locally on the builder, not in the registry cache.
+- Version metadata is applied after filesystem layers, so changing the commit
+  or build timestamp does not recompile PHP extensions. The first build after
+  these Dockerfile changes warms the new cache; later builds benefit from reuse.
+
+Use `BUILDKIT_PROGRESS=plain just publish` to inspect step timings and `CACHED`
+markers during an intended publish. Dependency or base-image updates still
+invalidate the relevant layers; pruning the builder removes its local caches.
+
 Accounts and resources:
 
 - A Cloudflare zone for the OpnForm hostname, an OVH account with a default

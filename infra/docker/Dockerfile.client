@@ -11,13 +11,8 @@ ADD ./client/package.json ./client/package-lock.json ./
 # Install git and other necessary build tools
 RUN apk add --no-cache git
 
-# Clear npm cache, remove existing node_modules, and install dependencies
-RUN npm cache clean --force && \
-    rm -rf node_modules && \
-    npm ci
-
-# Clean up after npm install to free memory
-RUN npm cache clean --force
+# Keep downloaded packages across dependency changes without adding them to layers.
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # Explicitly install the correct version of esbuild
 # RUN npm install esbuild@0.21.5
@@ -41,6 +36,10 @@ RUN --mount=type=tmpfs,target=/tmp \
 
 FROM node:24-alpine
 WORKDIR /app
+COPY --from=javascript-builder /app/.output/ /app/
+RUN ls /app/
+
+# Keep changing release metadata after all filesystem layers.
 ARG APP_VERSION=unknown
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -50,7 +49,5 @@ LABEL org.opencontainers.image.title="OpnForm Client" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 ENV APP_VERSION_DOCKER=$APP_VERSION
-COPY --from=javascript-builder /app/.output/ /app/
-RUN ls /app/
 
 CMD [ "node", "./server/index.mjs" ]
