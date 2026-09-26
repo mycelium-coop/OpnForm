@@ -29,12 +29,6 @@ return [
         'open.workspaces.delete',
         'open.workspaces.forms.index',
 
-        // Workspace OIDC connections. This lets the infrastructure automation
-        // token reconcile a self-hosted OIDC connection without a password JWT.
-        'open.workspaces.oidc-connections.index',
-        'open.workspaces.oidc-connections.store',
-        'open.workspaces.oidc-connections.update',
-
         // Workspace User Management
         'open.workspaces.users.index',
         'open.workspaces.users.add',

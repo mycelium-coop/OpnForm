@@ -18,9 +18,8 @@ WORKDIR /app
 # Copy the entire source code for proper installation
 COPY api/ .
 
-# Production builds install no development dependencies by default.
-ARG COMPOSER_FLAGS="--no-dev --optimize-autoloader --no-interaction"
-RUN composer install ${COMPOSER_FLAGS} \
+# Install dependencies including dev dependencies
+RUN composer install --optimize-autoloader --no-interaction \
     --ignore-platform-req=php \
     --ignore-platform-req=ext-bcmath \
     --ignore-platform-req=ext-gd
@@ -30,14 +29,6 @@ FROM php:8.3-fpm-alpine
 
 # Accept version build argument
 ARG APP_VERSION=unknown
-ARG VCS_REF=unknown
-ARG BUILD_DATE=unknown
-
-LABEL org.opencontainers.image.title="OpnForm API" \
-      org.opencontainers.image.source="https://github.com/OpnForm/OpnForm" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
