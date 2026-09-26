@@ -634,6 +634,18 @@ That command:
 5. Runs Ansible `site.yml` (host prep, Caddy, compose release, bootstrap).
 6. Runs smoke checks against `https://$OPNFORM_HOSTNAME`.
 
+The form footer version is the newest `vX.Y.Z` release tag from
+[OpnForm/OpnForm](https://github.com/OpnForm/OpnForm) that is contained in
+`infra/upstream-baseline`. With the current baseline that is `v2.5.0`. The
+deploy id stays `sha-<fork commit>`. After upstream publishes `v2.6.0`, this
+instance still shows `v2.5.0` until that tag is merged and a new image is
+published. Compare the footer with upstream's tags to see how many releases
+behind you are.
+
+`https://$OPNFORM_HOSTNAME/v` returns both values as plain text (upstream
+tag on the first line, `sha-<fork commit>` on the second). Use it to confirm
+the running image without SSH.
+
 To skip Pest while still running lint and refusing a dirty worktree (also
 honored by `just release-check`, `just build`, and `just publish`):
 

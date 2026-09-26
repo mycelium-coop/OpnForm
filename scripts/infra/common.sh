@@ -168,6 +168,42 @@ prefer_onepassword_ssh_agent() {
   done
 }
 
+# Newest OpnForm/OpnForm vX.Y.Z tag contained in infra/upstream-baseline.
+# The footer shows this string, so a later upstream tag tells you how many
+# releases behind this deploy is. Deploy ids stay sha-<fork commit>.
+upstream_app_version() {
+  local root baseline remote tag_ref tag_name tag_commit best=""
+  root="$(infra_root)"
+  baseline="$(tr -d '[:space:]' < "${root}/infra/upstream-baseline")"
+  [[ "${baseline}" =~ ^[0-9a-f]{40}$ ]] || {
+    printf '%s\n' 'infra/upstream-baseline must be a full commit SHA.' >&2
+    return 1
+  }
+  git -C "${root}" cat-file -e "${baseline}^{commit}" 2>/dev/null || {
+    printf 'Upstream baseline %s is not in this clone.\n' "${baseline}" >&2
+    return 1
+  }
+  remote="${OPNFORM_UPSTREAM_URL:-https://github.com/OpnForm/OpnForm.git}"
+  git -C "${root}" fetch --quiet "${remote}" \
+    '+refs/tags/v*:refs/opnform-upstream-tags/v*'
+
+  while IFS= read -r tag_ref; do
+    tag_name="${tag_ref#refs/opnform-upstream-tags/}"
+    [[ "${tag_name}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    tag_commit="$(git -C "${root}" rev-parse "${tag_ref}^{commit}")"
+    git -C "${root}" merge-base --is-ancestor "${tag_commit}" "${baseline}" || continue
+    if [[ -z "${best}" ]] || [[ "$(printf '%s\n%s\n' "${best}" "${tag_name}" | sort -V | tail -n1)" == "${tag_name}" ]]; then
+      best="${tag_name}"
+    fi
+  done < <(git -C "${root}" for-each-ref --format='%(refname)' 'refs/opnform-upstream-tags')
+
+  [[ -n "${best}" ]] || {
+    printf 'No OpnForm release tag is contained in upstream baseline %s.\n' "${baseline}" >&2
+    return 1
+  }
+  printf '%s' "${best}"
+}
+
 release_directory() {
   printf '%s/infra/.deploy/releases' "$(infra_root)"
 }

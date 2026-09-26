@@ -32,7 +32,9 @@ allowlist=(
   AGENTS.md
   api/config/app.php
   api/app/Providers/SelfHostedOidcSanctumServiceProvider.php
+  api/app/Providers/SelfHostedVersionEndpointServiceProvider.php
   api/tests/Feature/SelfHosted/SelfHostedOidcSanctumRoutesTest.php
+  api/tests/Feature/SelfHosted/SelfHostedVersionEndpointTest.php
   client/components/workspaces/settings/sso/Oidc.vue
 )
 

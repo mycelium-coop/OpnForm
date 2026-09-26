@@ -13,6 +13,14 @@ root="$(infra_root)"
 release_id="sha-$(git -C "${root}" rev-parse HEAD)"
 api_tag="${GHCR_HOST}/${GHCR_OWNER}/${GHCR_API_REPOSITORY}:${release_id}"
 client_tag="${GHCR_HOST}/${GHCR_OWNER}/${GHCR_CLIENT_REPOSITORY}:${release_id}"
+app_version=""
+
+resolve_app_version() {
+  if [[ -z "${app_version}" ]]; then
+    app_version="$(upstream_app_version)"
+    printf 'Image version from OpnForm/OpnForm: %s\n' "${app_version}" >&2
+  fi
+}
 
 check_clean_tree() {
   # Ignore legacy repo-root .deploy/ (manifests moved to infra/.deploy/).
@@ -62,7 +70,8 @@ build_image() {
   local dockerfile="$1"
   local image_tag="$2"
   local push="$3"
-  local action_args=(--platform "${IMAGE_PLATFORM}" --provenance=true --sbom=true --build-arg "APP_VERSION=${release_id}" --build-arg "VCS_REF=$(git -C "${root}" rev-parse HEAD)" --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "${image_tag}" --file "${dockerfile}")
+  resolve_app_version
+  local action_args=(--platform "${IMAGE_PLATFORM}" --provenance=true --sbom=true --build-arg "APP_VERSION=${app_version}" --build-arg "VCS_REF=$(git -C "${root}" rev-parse HEAD)" --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "${image_tag}" --file "${dockerfile}")
 
   if [[ "${push}" == "true" ]]; then
     action_args+=(--push)
@@ -101,6 +110,7 @@ ensure_attestation_builder() {
 
 build_local() {
   release_check
+  resolve_app_version
   preserve_docker_host
   ensure_attestation_builder
   build_image "${root}/infra/docker/Dockerfile.api" "${api_tag}" false
@@ -128,6 +138,7 @@ preserve_docker_host() {
 
 publish_images() {
   release_check
+  resolve_app_version
   require_value GHCR_PUSH_USERNAME
   require_value GHCR_PUSH_TOKEN
   require_command jq
@@ -152,11 +163,12 @@ publish_images() {
   umask 077
   cat >"${manifest}" <<EOF
 RELEASE_ID=${release_id}
+UPSTREAM_VERSION=${app_version}
 OPNFORM_API_IMAGE=${GHCR_HOST}/${GHCR_OWNER}/${GHCR_API_REPOSITORY}@${api_digest}
 OPNFORM_CLIENT_IMAGE=${GHCR_HOST}/${GHCR_OWNER}/${GHCR_CLIENT_REPOSITORY}@${client_digest}
 EOF
   chmod 0600 "${manifest}"
-  printf 'Published %s and wrote %s.\n' "${release_id}" "${manifest}"
+  printf 'Published %s (%s) and wrote %s.\n' "${release_id}" "${app_version}" "${manifest}"
 }
 
 deploy_release() {

@@ -40,9 +40,11 @@ merging newer upstream commits into them):
 | Path | Why it remains |
 | --- | --- |
 | `AGENTS.md` | Short pointer to `infra/AGENTS.md` and this file so Codex/Cursor load fork rules for infra work |
-| `api/config/app.php` | Registers `SelfHostedOidcSanctumServiceProvider` so bootstrap tokens can manage OIDC connections without editing `sanctum-routes.php` |
+| `api/config/app.php` | Registers fork providers for OIDC Sanctum routes and the public `/v` version endpoint |
 | `api/app/Providers/SelfHostedOidcSanctumServiceProvider.php` | Fork-only provider that appends OIDC Sanctum route names at boot |
+| `api/app/Providers/SelfHostedVersionEndpointServiceProvider.php` | Fork-only provider that registers public plain-text `GET /v` |
 | `api/tests/Feature/SelfHosted/SelfHostedOidcSanctumRoutesTest.php` | Covers the OIDC Sanctum allowlist append |
+| `api/tests/Feature/SelfHosted/SelfHostedVersionEndpointTest.php` | Covers the plain-text `/v` version body |
 | `client/components/workspaces/settings/sso/Oidc.vue` | Hoists `updateMutation` into setup; `useMutation()` cannot run inside a click handler |
 
 Any other change under upstream-owned trees should be reverted or moved into
@@ -61,7 +63,8 @@ with complete ignore files:
 - `infra/docker/Dockerfile.client.dockerignore`
 
 **Baseline for the copies:** upstream `docker/Dockerfile.*` at `3a1b5abd`, plus
-OCI image labels and the API `COMPOSER_FLAGS` default (`--no-dev`).
+OCI image labels, the API `COMPOSER_FLAGS` default (`--no-dev`), and
+`APP_VCS_REF` so `/v` can report the fork commit.
 
 Upstream CI still builds `docker/Dockerfile.api` and `docker/Dockerfile.client`.
 When merging upstream, diff those files against the baseline and replay any
@@ -73,6 +76,7 @@ automatically.
 | Patch | Test / check |
 | --- | --- |
 | `SelfHostedOidcSanctumServiceProvider` | `php vendor/bin/pest --filter='DualAuthMiddlewareTest|SelfHostedOidcSanctumRoutesTest'` from `api/` (after the env prep in `scripts/infra/release.sh` `release_check`) |
+| `SelfHostedVersionEndpointServiceProvider` | `php vendor/bin/pest --filter='SelfHostedVersionEndpointTest'` from `api/` |
 | `Oidc.vue` `updateMutation` hoist | Manual SSO settings UI; no dedicated automated test |
 | `infra/docker` images | `scripts/infra/check-fork-images.sh` |
 
@@ -82,6 +86,8 @@ automatically.
 2. Set `infra/upstream-baseline` to the incorporated upstream tip (the merge
    parent from upstream, or `upstream/main` after a fast-forward). Commit that
    file with the merge so the allowlist guard measures only fork differences.
+   The next image build sets `APP_VERSION` to the newest `vX.Y.Z` tag on
+   OpnForm/OpnForm that is contained in this baseline.
 3. Diff `docker/Dockerfile.api` and `docker/Dockerfile.client` against the
    previous baseline; update `infra/docker/` if needed.
 4. Run the allowlist guard:
@@ -92,7 +98,7 @@ automatically.
 6. From `api/`, with the same env prep as `release_check`, run:
 
    ```bash
-   php -d memory_limit=512M ./vendor/bin/pest --filter='DualAuthMiddlewareTest|SelfHostedOidcSanctumRoutesTest'
+   php -d memory_limit=512M ./vendor/bin/pest --filter='DualAuthMiddlewareTest|SelfHostedOidcSanctumRoutesTest|SelfHostedVersionEndpointTest'
    php -d memory_limit=512M ./vendor/bin/pest --filter='RegisterTest|WorkspaceInviteLimitTest|ProvisioningServiceTest'
    ```
 

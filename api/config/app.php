@@ -25,6 +25,7 @@ return [
     |
     */
     'docker_version' => env('APP_VERSION_DOCKER'),
+    'docker_revision' => env('APP_VCS_REF'),
 
     /*
     |--------------------------------------------------------------------------
@@ -246,6 +247,7 @@ return [
         App\Providers\VaporUiServiceProvider::class,
         App\Providers\PurifySetupProvider::class,
         App\Providers\SelfHostedOidcSanctumServiceProvider::class,
+        App\Providers\SelfHostedVersionEndpointServiceProvider::class,
 
         /*
         * Package Service Providers...
