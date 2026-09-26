@@ -193,8 +193,9 @@ const emptyConnectionData = () => ({
 
 const connectionForm = useForm(emptyConnectionData())
 
-// Create mutations following useWorkspaces.js pattern
+// Create mutations in setup. useMutation() cannot run from a click handler.
 const createMutation = create()
+const updateMutation = update(computed(() => editingConnection.value?.id))
 const deleteMutation = remove()
 
 const openCreateModal = () => {
@@ -205,8 +206,6 @@ const openCreateModal = () => {
 
 const saveConnection = () => {
   if (editingConnection.value) {
-    // Update existing connection
-    const updateMutation = update(editingConnection.value.id)
     const keepExistingSecret = !connectionForm.client_secret?.trim()
 
     // The API intentionally preserves the existing secret when it is omitted.

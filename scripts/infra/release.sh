@@ -15,7 +15,8 @@ api_tag="${GHCR_HOST}/${GHCR_OWNER}/${GHCR_API_REPOSITORY}:${release_id}"
 client_tag="${GHCR_HOST}/${GHCR_OWNER}/${GHCR_CLIENT_REPOSITORY}:${release_id}"
 
 check_clean_tree() {
-  if [[ -n "$(git -C "${root}" status --porcelain --untracked-files=normal)" ]]; then
+  # Ignore legacy repo-root .deploy/ (manifests moved to infra/.deploy/).
+  if [[ -n "$(git -C "${root}" status --porcelain --untracked-files=normal -- . ':(exclude).deploy' ':(exclude).deploy/**')" ]]; then
     printf '%s\n' 'Refusing to build a release from a dirty Git worktree.' >&2
     exit 1
   fi
@@ -102,8 +103,8 @@ build_local() {
   release_check
   preserve_docker_host
   ensure_attestation_builder
-  build_image "${root}/docker/Dockerfile.api" "${api_tag}" false
-  build_image "${root}/docker/Dockerfile.client" "${client_tag}" false
+  build_image "${root}/infra/docker/Dockerfile.api" "${api_tag}" false
+  build_image "${root}/infra/docker/Dockerfile.client" "${client_tag}" false
   trivy image --exit-code 1 --severity HIGH,CRITICAL "${api_tag}"
   trivy image --exit-code 1 --severity HIGH,CRITICAL "${client_tag}"
 }
@@ -137,15 +138,17 @@ publish_images() {
   printf '%s' "${GHCR_PUSH_TOKEN}" | DOCKER_CONFIG="${docker_config}" docker login "${GHCR_HOST}" --username "${GHCR_PUSH_USERNAME}" --password-stdin >/dev/null
   # Isolated DOCKER_CONFIG has no Buildx builders; create one that supports attestations.
   DOCKER_CONFIG="${docker_config}" ensure_attestation_builder
-  DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.api" "${api_tag}" true
-  DOCKER_CONFIG="${docker_config}" build_image "${root}/docker/Dockerfile.client" "${client_tag}" true
+  DOCKER_CONFIG="${docker_config}" build_image "${root}/infra/docker/Dockerfile.api" "${api_tag}" true
+  DOCKER_CONFIG="${docker_config}" build_image "${root}/infra/docker/Dockerfile.client" "${client_tag}" true
 
   local api_digest client_digest manifest
   api_digest="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect "${api_tag}" --format '{{.Manifest.Digest}}')"
   client_digest="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect "${client_tag}" --format '{{.Manifest.Digest}}')"
   [[ "${api_digest}" == sha256:* && "${client_digest}" == sha256:* ]] || { printf '%s\n' 'Could not resolve immutable registry digests.' >&2; exit 1; }
   mkdir -p "$(release_directory)"
-  manifest="$(release_manifest "${release_id}")"
+  # Always write under infra/.deploy/releases. release_manifest() may still
+  # resolve a legacy path for readers; publishing must not overwrite it.
+  manifest="$(new_release_manifest "${release_id}")"
   umask 077
   cat >"${manifest}" <<EOF
 RELEASE_ID=${release_id}

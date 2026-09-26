@@ -169,10 +169,33 @@ prefer_onepassword_ssh_agent() {
 }
 
 release_directory() {
+  printf '%s/infra/.deploy/releases' "$(infra_root)"
+}
+
+legacy_release_directory() {
   printf '%s/.deploy/releases' "$(infra_root)"
 }
 
-release_manifest() {
+# Always the write destination for newly published manifests.
+new_release_manifest() {
   local release_id="$1"
   printf '%s/%s.env' "$(release_directory)" "${release_id}"
+}
+
+# Resolve a manifest for readers. Prefer the new location, then fall back to
+# the legacy repo-root path so existing release IDs keep working during migration.
+release_manifest() {
+  local release_id="$1"
+  local manifest legacy_manifest
+  manifest="$(new_release_manifest "${release_id}")"
+  if [[ -f "${manifest}" ]]; then
+    printf '%s' "${manifest}"
+    return 0
+  fi
+  legacy_manifest="$(legacy_release_directory)/${release_id}.env"
+  if [[ -f "${legacy_manifest}" ]]; then
+    printf '%s' "${legacy_manifest}"
+    return 0
+  fi
+  printf '%s' "${manifest}"
 }

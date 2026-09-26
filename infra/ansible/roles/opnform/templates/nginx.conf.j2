@@ -12,9 +12,14 @@ server {
     access_log /dev/stdout;
     error_log /dev/stderr error;
 
+    # Literal proxy_pass/fastcgi_pass hostnames are resolved once at start.
+    # Variables plus Docker DNS (127.0.0.11) re-resolve after container recreates.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
     location / {
         proxy_http_version 1.1;
-        proxy_pass http://ui:3000;
+        set $ui_upstream ui:3000;
+        proxy_pass http://$ui_upstream;
         proxy_set_header X-Real-IP $http_x_real_ip;
         proxy_set_header X-Forwarded-For $http_x_forwarded_for;
         proxy_set_header X-Forwarded-Host $host;
@@ -30,7 +35,8 @@ server {
 
     location ~ \.php$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass api:9000;
+        set $api_upstream api:9000;
+        fastcgi_pass $api_upstream;
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root/index.php;

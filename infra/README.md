@@ -407,9 +407,39 @@ See the [OAuth Integration Setup](https://docs.opnform.com/configuration/oauth-s
 CONFIRM_PROD=opnform-prod just google-sheets
 ```
 
-That re-renders `/opt/opnform/secrets/api.env` and recreates the API containers.
-Full `just deploy` / `just release` also honor the toggle when rendering `api.env`.
+That re-renders `/opt/opnform/secrets/api.env` and recreates the API containers
+and ingress. Ingress nginx re-resolves `api` and `ui` through Docker DNS, so a
+stale upstream IP cannot survive a container recreate; the ingress bounce still
+makes the cutover immediate. Full `just deploy` / `just release` also honor the
+toggle when rendering `api.env`.
+
 To disable, set `GOOGLE_SHEETS_ENABLED=false` and run `just google-sheets` again.
+
+### Google Fonts (optional)
+
+`just env` injects `GOOGLE_FONTS_API_KEY` from the `google-font-api-key`
+1Password field. When that value is present, Ansible copies it into
+`/opt/opnform/secrets/api.env`. The API enables the form font picker when the
+key is set. This is an instance setting, not a plan entitlement. If the field
+is missing, `just env` leaves the variable empty and warns.
+
+| 1Password field | Purpose | How to create or find it |
+| --- | --- | --- |
+| `google-font-api-key` | Google Fonts Developer API key | [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials → API key. Enable the [Web Fonts Developer API](https://developers.google.com/fonts/docs/developer_api). Restrict the key to that API. |
+
+After populating `GOOGLE_FONTS_API_KEY` in the local `.env`, deploy an existing
+published release using its release ID:
+
+```sh
+CONFIRM_PROD=opnform-prod just deploy-release sha-<sha>
+```
+
+That re-renders `/opt/opnform/secrets/api.env` and applies the updated environment
+to the API containers without rebuilding images. The API startup clears the
+application cache, including font availability.
+
+To disable, empty `GOOGLE_FONTS_API_KEY` in `.env` and deploy the release again.
+Also empty or remove the 1Password field to keep future environment renders disabled.
 
 ### OIDC (optional but enabled by default)
 
@@ -600,7 +630,7 @@ That command:
 1. Runs lint/tests (`npm run lint`, `api/vendor/bin/pest`).
 2. Builds Linux AMD64 API and client images with Buildx.
 3. Scans them with Trivy (fails on HIGH/CRITICAL).
-4. Pushes to GHCR and writes `.deploy/releases/sha-<40-char-commit>.env`.
+4. Pushes to GHCR and writes `infra/.deploy/releases/sha-<40-char-commit>.env`.
 5. Runs Ansible `site.yml` (host prep, Caddy, compose release, bootstrap).
 6. Runs smoke checks against `https://$OPNFORM_HOSTNAME`.
 
@@ -622,9 +652,35 @@ just publish
 CONFIRM_PROD=opnform-prod just deploy-release sha-<40-character-commit>
 ```
 
-Local release manifests under `.deploy/releases/` are gitignored. Losing a
+Local release manifests under `infra/.deploy/releases/` are gitignored. Losing a
 manifest means republishing that commit or rebuilding the digest file before
 `deploy-release`.
+
+If you still have manifests under the old repo-root `.deploy/releases/` path,
+migrate them file-by-file (safe when `infra/.deploy/releases/` already has
+newer publishes). Preserves modes and skips IDs that already exist at the
+destination:
+
+```sh
+mkdir -p infra/.deploy/releases
+if [ -d .deploy/releases ]; then
+  for src in .deploy/releases/*.env; do
+    [ -e "$src" ] || continue
+    dest="infra/.deploy/releases/$(basename "$src")"
+    if [ -e "$dest" ]; then
+      printf 'skip existing %s\n' "$dest"
+      continue
+    fi
+    cp -p "$src" "$dest"
+    printf 'migrated %s\n' "$dest"
+  done
+fi
+```
+
+`release_manifest` still reads the legacy path when the new file is missing,
+so existing release IDs keep working until you migrate. After verifying,
+remove `.deploy/releases`. Publishing always writes to
+`infra/.deploy/releases/` and never overwrites a legacy file.
 
 ### What “done” looks like
 
@@ -774,13 +830,13 @@ console. Use the OVH KVM console when your current public IP is not in
    disabled; this password is for console login only. Type a few characters
    first — the KVM keyboard layout may not match yours.
 5. Add your current public IP (use `/32` for a single address), optionally
-   remove the old rule, and confirm:
+   remove the old rule, and confirm. Copy `scripts/infra/update_ufw.sh` to the
+   VPS, then:
 
 ```sh
-sudo ufw status numbered
-sudo ufw allow from NEW.IP.ADDR.ESS/32 to any port 22 proto tcp
-# optional: sudo ufw delete allow from OLD.IP.ADDR.ESS/32 to any port 22 proto tcp
-sudo ufw status
+./update_ufw.sh add NEW.IP.ADDR.ESS
+# optional: ./update_ufw.sh remove OLD.IP.ADDR.ESS
+./update_ufw.sh list
 ```
 
 Replace `22` with `SSH_PORT` if you changed it. Prefer allowing a stable

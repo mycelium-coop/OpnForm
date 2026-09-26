@@ -244,6 +244,7 @@ return [
         App\Providers\RouteServiceProvider::class,
         App\Providers\VaporUiServiceProvider::class,
         App\Providers\PurifySetupProvider::class,
+        App\Providers\SelfHostedOidcSanctumServiceProvider::class,
 
         /*
         * Package Service Providers...

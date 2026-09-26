@@ -55,8 +55,9 @@
       - api-scheduler
   changed_when: true
 
-# Ingress nginx resolves api:9000 at start; recreate so it learns the new API IP.
-- name: Recreate ingress so nginx re-resolves the API upstream
+# Recreate ingress so the first request after API IP change does not wait for
+# the 10s Docker DNS cache on the running nginx workers.
+- name: Recreate ingress after API containers change IPs
   ansible.builtin.command:
     argv:
       - docker

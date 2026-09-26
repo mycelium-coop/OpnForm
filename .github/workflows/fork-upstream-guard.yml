@@ -1,0 +1,17 @@
+name: Fork upstream allowlist
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  allowlist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check upstream-owned paths against fork baseline
+        run: bash scripts/infra/check-upstream-allowlist.sh

@@ -1,0 +1,98 @@
+# Build stage - using PHP CLI image with extensions
+FROM php:8.3-cli AS builder
+
+# Install composer and extensions needed for dependency installation
+RUN apt-get update && apt-get install -y \
+    libzip-dev \
+    libpng-dev \
+    unzip \
+    git \
+    && docker-php-ext-install -j$(nproc) \
+    bcmath \
+    gd \
+    zip \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+WORKDIR /app
+
+# Copy the entire source code for proper installation
+COPY api/ .
+
+# Production builds install no development dependencies by default.
+ARG COMPOSER_FLAGS="--no-dev --optimize-autoloader --no-interaction"
+RUN composer install ${COMPOSER_FLAGS} \
+    --ignore-platform-req=php \
+    --ignore-platform-req=ext-bcmath \
+    --ignore-platform-req=ext-gd
+
+# Final stage - smaller runtime image
+FROM php:8.3-fpm-alpine
+
+# Accept version build argument
+ARG APP_VERSION=unknown
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.title="OpnForm API" \
+      org.opencontainers.image.source="https://github.com/OpnForm/OpnForm" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    libzip \
+    libpng \
+    postgresql-client \
+    libpq \
+    procps \
+    unzip \
+    bash \
+    icu-libs \
+    && rm -rf /var/cache/apk/*
+
+# Install build dependencies and PHP extensions
+RUN apk add --no-cache --virtual .build-deps \
+    $PHPIZE_DEPS \
+    libzip-dev \
+    libpng-dev \
+    postgresql-dev \
+    oniguruma-dev \
+    icu-dev \
+    && docker-php-ext-configure pgsql \
+    && docker-php-ext-configure gd \
+    && docker-php-ext-install -j$(nproc) \
+    pdo \
+    zip \
+    gd \
+    pgsql \
+    pdo_pgsql \
+    bcmath \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
+
+WORKDIR /usr/share/nginx/html/
+
+# Create storage directories
+RUN mkdir -p storage/framework/sessions \
+    storage/framework/views \
+    storage/framework/cache \
+    storage/logs \
+    storage/app/public \
+    bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+# Copy the entire application from the builder stage
+COPY --from=builder /app/ ./
+
+# Set version as environment variable
+ENV APP_VERSION_DOCKER=$APP_VERSION
+
+# Setup entrypoint
+COPY docker/php-fpm-entrypoint /usr/local/bin/opnform-entrypoint
+RUN chmod a+x /usr/local/bin/*
+
+ENTRYPOINT ["/usr/local/bin/opnform-entrypoint"]
+CMD ["php-fpm"]

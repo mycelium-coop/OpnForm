@@ -1,0 +1,20 @@
+# Production infrastructure artifacts and generated inventories
+/.deploy/
+/ansible/inventories/production/hosts.yml
+/ansible/inventories/production/group_vars/all/generated.yml
+/opentofu/**/.terraform/
+/opentofu/**/*.tfstate
+/opentofu/**/*.tfstate.*
+/opentofu/**/*.tfplan
+/opentofu/**/backend.hcl
+/opentofu/bootstrap/.backend-mode
+/opentofu/bootstrap/backend.generated.tf
+/opentofu/**/state-snapshots/
+/ansible/*.retry
+/ansible/.cache/
+/ansible/.collections/
+/ansible/.venv/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
