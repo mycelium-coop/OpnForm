@@ -57,6 +57,51 @@
           - --remove-orphans
       changed_when: true
 
+    # The Nginx template is a file bind mount. Recreate ingress to bind the
+    # latest file and load its routes, even when the image is unchanged.
+    - name: Recreate ingress with the rendered Nginx configuration
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_release_id }}/docker-compose.yml"
+          - up
+          - -d
+          - --no-deps
+          - --force-recreate
+          - --wait
+          - --wait-timeout
+          - '60'
+          - ingress
+      changed_when: true
+
+    - name: Check the public version route through ingress
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/v
+        status_code: 200
+        return_content: true
+      register: opnform_version_response
+      failed_when: >-
+        opnform_version_response.status != 200 or
+        'text/plain' not in (opnform_version_response.content_type | default('')) or
+        (opnform_version_response.content | default('')).splitlines() | length != 2 or
+        (opnform_version_response.content | default('')).splitlines()[-1] != opnform_release_id
+
+    - name: Check Nuxt icon collections through ingress
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/_nuxt_icon/{{ item.collection }}.json?icons={{ item.icon }}"
+        status_code: 200
+        return_content: true
+      loop:
+        - { collection: heroicons, icon: chevron-up-down-16-solid }
+        - { collection: material-symbols, icon: check-box-outline-blank }
+      register: opnform_icon_response
+      failed_when: >-
+        opnform_icon_response.status != 200 or
+        opnform_icon_response.json.prefix | default('') != item.collection or
+        opnform_icon_response.json.icons[item.icon].body | default('') | length == 0
+
     - name: Set the current release symlink only after successful startup
       ansible.builtin.file:
         src: "{{ opnform_release_dir }}/{{ opnform_release_id }}"

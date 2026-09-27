@@ -670,6 +670,13 @@ behind you are.
 tag on the first line, `sha-<fork commit>` on the second). Use it to confirm
 the running image without SSH.
 
+The release recreates ingress after rendering its Nginx configuration so new
+routes take effect even when the ingress image is unchanged. Before marking the
+release current, it checks that `/v` reports the expected release SHA as plain
+text and that `/api/_nuxt_icon/` returns SVG data for both Heroicons and Material
+Symbols through ingress. Nuxt serves icon requests; other `/api/` requests
+continue to Laravel.
+
 To skip Pest while still running lint and refusing a dirty worktree (also
 honored by `just release-check`, `just build`, and `just publish`):
 
