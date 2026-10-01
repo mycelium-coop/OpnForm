@@ -1,0 +1,193 @@
+---
+# Capture recovery artifacts and enter verified maintenance before the caddy
+# or opnform roles change live configuration. Retained snapshots are never
+# overwritten by later retries.
+
+- name: Check for an existing successful release before configuration changes
+  ansible.builtin.stat:
+    path: "{{ opnform_project_dir }}/current/docker-compose.yml"
+  register: opnform_prepare_current_stat
+
+- name: Set prepare initial-deployment state
+  ansible.builtin.set_fact:
+    opnform_first_deploy: "{{ not opnform_prepare_current_stat.stat.exists }}"
+
+- name: Resolve the current release identifier for recovery
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - "{{ opnform_project_dir }}/current"
+  register: opnform_prepare_current_link
+  changed_when: false
+  when: not opnform_first_deploy | bool
+
+- name: Set the current release identifier
+  ansible.builtin.set_fact:
+    opnform_prepare_current_release: "{{ opnform_prepare_current_link.stdout | basename }}"
+  when: not opnform_first_deploy | bool
+
+- name: Create a unique recovery snapshot directory
+  ansible.builtin.file:
+    path: >-
+      {{ opnform_project_dir }}/recovery/{{ ansible_date_time.iso8601_basic_short }}-before-{{
+      opnform_release_id | default(opnform_rollback_release) | default('unknown') }}
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  register: opnform_recovery_snapshot_dir
+  when: not opnform_first_deploy | bool
+
+- name: Record the recovery snapshot path
+  ansible.builtin.set_fact:
+    opnform_recovery_snapshot: "{{ opnform_recovery_snapshot_dir.path }}"
+  when: not opnform_first_deploy | bool
+
+- name: Persist the current release identifier in the recovery snapshot
+  ansible.builtin.copy:
+    content: "{{ opnform_prepare_current_release }}\n"
+    dest: "{{ opnform_recovery_snapshot }}/release_id"
+    owner: root
+    group: root
+    mode: '0600'
+  when: not opnform_first_deploy | bool
+
+- name: Snapshot the current Compose release bundle
+  ansible.builtin.copy:
+    src: "{{ opnform_project_dir }}/current/docker-compose.yml"
+    dest: "{{ opnform_recovery_snapshot }}/docker-compose.yml"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: not opnform_first_deploy | bool
+
+- name: Check for a per-release Nginx artifact on the current release
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/nginx.conf"
+  register: opnform_prepare_release_nginx
+  when: not opnform_first_deploy | bool
+
+- name: Check for the shared pre-migration Nginx path
+  ansible.builtin.stat:
+    path: "{{ opnform_project_dir }}/config/nginx.conf"
+  register: opnform_prepare_shared_nginx
+  when: not opnform_first_deploy | bool
+
+- name: Snapshot the current Nginx configuration
+  ansible.builtin.copy:
+    src: "{{ opnform_prepare_release_nginx.stat.path if opnform_prepare_release_nginx.stat.exists else opnform_project_dir ~ '/config/nginx.conf' }}"
+    dest: "{{ opnform_recovery_snapshot }}/nginx.conf"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_release_nginx.stat.exists or opnform_prepare_shared_nginx.stat.exists
+
+- name: Preserve the shared Nginx file on the pre-migration release bundle
+  ansible.builtin.copy:
+    src: "{{ opnform_project_dir }}/config/nginx.conf"
+    dest: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/nginx.conf"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_shared_nginx.stat.exists | default(false)
+    - not (opnform_prepare_release_nginx.stat.exists | default(false))
+
+- name: Check for the live OpnForm Caddy site
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_snippet_dir | default('/etc/caddy/conf.d') }}/opnform.caddy"
+  register: opnform_prepare_caddy_site
+  when: not opnform_first_deploy | bool
+
+- name: Snapshot the live OpnForm Caddy site
+  ansible.builtin.copy:
+    src: "{{ opnform_caddy_snippet_dir | default('/etc/caddy/conf.d') }}/opnform.caddy"
+    dest: "{{ opnform_recovery_snapshot }}/opnform.caddy"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_caddy_site.stat.exists
+
+- name: Check for the live Cloudflare gate snippet
+  ansible.builtin.stat:
+    path: "{{ opnform_cloudflare_gate_snippet }}"
+  register: opnform_prepare_gate
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_cloudflare_proxied | default(true) | bool
+    - opnform_caddy_origin_lockdown | default(true) | bool
+
+- name: Snapshot the live Cloudflare gate snippet
+  ansible.builtin.copy:
+    src: "{{ opnform_cloudflare_gate_snippet }}"
+    dest: "{{ opnform_recovery_snapshot }}/opnform-cloudflare-gate.caddy"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_gate is defined
+    - opnform_prepare_gate.stat.exists | default(false)
+
+- name: Create the current release routing directory for Caddy artifacts
+  ansible.builtin.file:
+    path: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/routing"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_caddy_site.stat.exists
+
+- name: Store the live Caddy site on the current release when missing
+  ansible.builtin.copy:
+    src: "{{ opnform_caddy_snippet_dir | default('/etc/caddy/conf.d') }}/opnform.caddy"
+    dest: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/routing/opnform.caddy"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_caddy_site.stat.exists
+
+- name: Store the live Cloudflare gate on the current release when missing
+  ansible.builtin.copy:
+    src: "{{ opnform_cloudflare_gate_snippet }}"
+    dest: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/routing/opnform-cloudflare-gate.caddy"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  when:
+    - not opnform_first_deploy | bool
+    - opnform_prepare_gate is defined
+    - opnform_prepare_gate.stat.exists | default(false)
+
+- name: Enable the maintenance snippet for the upcoming Caddy site template
+  ansible.builtin.include_tasks: maintenance.yml
+  vars:
+    opnform_maintenance_enabled: true
+    # The old site may not hold Cloudflare clients via this snippet alone.
+    # Verification happens on the overlay below.
+    opnform_maintenance_verify: false
+  when: not opnform_first_deploy | bool
+
+- name: Install the maintenance overlay before replacing the live site
+  ansible.builtin.include_tasks: maintenance_overlay.yml
+  when: not opnform_first_deploy | bool

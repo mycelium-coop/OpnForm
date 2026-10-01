@@ -1,5 +1,6 @@
 # Production infrastructure artifacts and generated inventories
 /.deploy/
+/.tmp/
 /ansible/inventories/production/hosts.yml
 /ansible/inventories/production/group_vars/all/generated.yml
 /opentofu/**/.terraform/

@@ -10,6 +10,11 @@
       tags: [docker_engine]
     - role: cloudflare_origin_lock
       tags: [cloudflare_origin_lock]
+    # Snapshot and verified maintenance must run before caddy/opnform change
+    # live configuration. Failures after this point restore from the snapshot.
+    - role: opnform_release
+      tasks_from: prepare.yml
+      tags: [opnform_release, caddy, opnform]
     - role: caddy
       tags: [caddy]
     - role: opnform

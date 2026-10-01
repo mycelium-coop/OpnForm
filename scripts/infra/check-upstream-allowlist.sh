@@ -36,6 +36,7 @@ allowlist=(
   api/tests/Feature/SelfHosted/SelfHostedOidcSanctumRoutesTest.php
   api/tests/Feature/SelfHosted/SelfHostedVersionEndpointTest.php
   client/components/workspaces/settings/sso/Oidc.vue
+  client/nuxt.config.ts
 )
 
 is_fork_owned() {

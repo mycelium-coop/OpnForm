@@ -15,3 +15,17 @@ jobs:
 
       - name: Check upstream-owned paths against fork baseline
         run: bash scripts/infra/check-upstream-allowlist.sh
+
+      - name: Check Nuxt icon endpoint override
+        run: bash scripts/infra/check-nuxt-icon-endpoint.sh
+
+  routing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run routing harness
+        run: bash scripts/infra/routing-check.sh

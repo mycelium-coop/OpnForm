@@ -55,8 +55,8 @@
       - api-scheduler
   changed_when: true
 
-# Recreate ingress so the first request after API IP change does not wait for
-# the 10s Docker DNS cache on the running nginx workers.
+# Recreate ingress so upstream Nginx re-resolves opnform-api after the API
+# container replacement. Upstream hostnames are resolved at Nginx start.
 - name: Recreate ingress after API containers change IPs
   ansible.builtin.command:
     argv:

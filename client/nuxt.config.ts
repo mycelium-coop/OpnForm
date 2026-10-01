@@ -168,6 +168,9 @@ export default defineNuxtConfig({
   },
 
   icon: {
+      // Keep Nuxt Icon outside Laravel's /api namespace so upstream Nginx can
+      // forward it to the UI. Rebuild the client image after changing this.
+      localApiEndpoint: '/_nuxt_icon',
       // Managed E2E worktrees place buildDir outside client/node_modules, so
       // locally-installed JSON collections cannot be resolved at runtime there.
       serverBundle: (isE2EMode || buildDir) ? 'remote' : 'auto',

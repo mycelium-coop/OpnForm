@@ -1,4 +1,6 @@
 {% if opnform_maintenance_enabled | bool %}
+# Catch-all maintenance response. Must be imported first inside a `route`
+# block so it wins over the Cloudflare allowlist handle.
 handle {
     header Retry-After "120"
     respond "OpnForm is temporarily undergoing maintenance." 503

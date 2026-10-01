@@ -17,6 +17,67 @@ over ad-hoc `tofu`, Ansible, or state commands because the wrappers load the
 correct variables, configure the backend, take state snapshots, and enforce
 production confirmation.
 
+### Upstream Releases and Fork Maintenance
+
+- Production updates must target an explicitly selected stable upstream release
+  tag. Treat instructions elsewhere to update from upstream `main` as
+  development-only. Merge the selected release into the fork, preserve its
+  customizations, and deploy tested fork images pinned by digest.
+- Keep `infra/upstream-baseline` truthful. Do not relabel a baseline containing
+  unreleased commits, reset history, or downgrade without a separately scoped
+  request. A version label derived from the newest tag contained in a commit
+  does not prove that the deployed code matches that release.
+- Before attributing a regression to upstream, compare the affected commit with
+  the stable release and check upstream issues and fixes. Distinguish reproduced
+  failures from inferred risks.
+- Keep upstream-owned edits small. Document intentional exceptions in both
+  `infra/FORK.md` and `scripts/infra/check-upstream-allowlist.sh`.
+
+### Routing Ownership and Nuxt Icons
+
+Production uses one hostname: the frontend at `https://forms.mycelium.coop`
+and the browser API at `/api`, with Caddy forwarding to unchanged upstream
+Nginx (`docker/nginx.conf`).
+
+- Deploy `docker/nginx.conf` verbatim into each release bundle and mount that
+  file at the Nginx template path. Checksum the mounted template, not the
+  env-substituted config. Independently maintained Nginx templates are not
+  allowed.
+- Put fork-specific routing in Caddy: rewrite exact `/v` to `/api/v`, and
+  legacy `/api/_nuxt_icon/*` to `/_nuxt_icon/*`. Keep those rewrites inside a
+  `route` that places maintenance ahead of the Cloudflare gate so maintenance
+  answers every client, including Cloudflare.
+- Nuxt Icon uses `icon.localApiEndpoint: '/_nuxt_icon'`. That changes both
+  server endpoint registration and client requests at build time; rebuild the
+  client image after changing it. Redeploying an old client leaves browsers on
+  `/api/_nuxt_icon/*`, which is why the legacy rewrite remains as new-server
+  compatibility only.
+- Upstream Nginx expects `opnform-client`, `opnform-api`, and
+  `NGINX_MAX_BODY_SIZE`. When adding Docker network aliases, ensure workers and
+  scheduler do not inherit the API alias through a shared Compose anchor.
+- Both active Caddy proxies force `X-Forwarded-Port` to `443` for the
+  production HTTPS origin. The Cloudflare gate alone replaces visitor IP from
+  `CF-Connecting-IP`; the non-lockdown proxy keeps Caddy’s default client IP
+  handling.
+
+### Deployment Activation and Verification
+
+- Capture recovery artifacts and establish verified maintenance before the
+  `caddy` or `opnform` roles change live configuration. Writing a maintenance
+  file is not enough; probe for a 503 response.
+- Upstream Nginx resolves backend names at startup. Recreate ingress after
+  backend replacements, before requiring the complete stack to pass health
+  checks.
+- Store Nginx and Caddy artifacts with each retained release. Recovery
+  snapshots must not be overwritten by retries. Rollback selects the target
+  release’s client, Caddy files, and Nginx mount. While restoring a pre-change
+  site whose maintenance ordering is unsafe, keep a maintenance overlay that
+  does not depend on that site’s `handle` order.
+- Verify `/v` content and the expected deployed image SHA through public Caddy.
+  Private checks use `/api/v` and `/_nuxt_icon/*`. Assert SVG bodies for
+  heroicons and material-symbols; HTTP 200 alone is insufficient.
+- Run `just routing-check` for the isolated harness.
+
 ### Environment Files
 
 - Root `.env` is generated, ignored, and secret-bearing. Never print it, commit
