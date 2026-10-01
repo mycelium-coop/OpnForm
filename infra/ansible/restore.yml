@@ -3,6 +3,9 @@
   hosts: opnform
   gather_facts: false
   become: true
-  roles:
-    - role: opnform_release
-      tasks_from: restore.yml
+  tasks:
+    # tasks_from on a roles: entry does not select this file.
+    - name: Restore the requested restic snapshot
+      ansible.builtin.import_role:
+        name: opnform_release
+        tasks_from: restore.yml

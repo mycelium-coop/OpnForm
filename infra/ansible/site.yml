@@ -3,34 +3,63 @@
   hosts: opnform
   gather_facts: true
   become: true
-  roles:
-    - role: host_hardening
+  tasks:
+    - name: Harden the host
+      ansible.builtin.import_role:
+        name: host_hardening
       tags: [host_hardening]
-    - role: docker_engine
+
+    - name: Install Docker Engine
+      ansible.builtin.import_role:
+        name: docker_engine
       tags: [docker_engine]
-    - role: cloudflare_origin_lock
+
+    - name: Install the Cloudflare origin lock
+      ansible.builtin.import_role:
+        name: cloudflare_origin_lock
       tags: [cloudflare_origin_lock]
-    # Snapshot and verified maintenance must run before caddy/opnform change
-    # live configuration. Failures after this point restore from the snapshot.
-    - role: opnform_release
-      tasks_from: prepare.yml
+
+    # tasks_from on a roles: entry is stored as a variable and main.yml still
+    # runs. import_role is what selects prepare.yml. Snapshot and verified
+    # maintenance must run before caddy or opnform change live configuration.
+    - name: Snapshot recovery state and hold maintenance
+      ansible.builtin.import_role:
+        name: opnform_release
+        tasks_from: prepare.yml
       tags: [opnform_release, caddy, opnform]
-    - role: caddy
+
+    - name: Configure Caddy
+      ansible.builtin.import_role:
+        name: caddy
       tags: [caddy]
-    - role: opnform
+
+    - name: Render the OpnForm release bundle
+      ansible.builtin.import_role:
+        name: opnform
       tags: [opnform]
-    - role: restic_backup
+
+    - name: Install backup tooling
+      ansible.builtin.import_role:
+        name: restic_backup
       tags: [restic_backup]
-    - role: opnform_release
+
+    - name: Activate the immutable release
+      ansible.builtin.import_role:
+        name: opnform_release
       tags: [opnform_release]
-    - role: opnform_bootstrap
+
+    - name: Bootstrap or reconcile OpnForm
+      ansible.builtin.import_role:
+        name: opnform_bootstrap
       tags: [opnform_bootstrap]
 
 - name: Verify deployed OpnForm services
   hosts: opnform
   gather_facts: false
   become: true
-  roles:
-    - role: opnform_release
-      tasks_from: smoke.yml
+  tasks:
+    - name: Smoke-check the deployed release
+      ansible.builtin.import_role:
+        name: opnform_release
+        tasks_from: smoke.yml
       tags: [opnform_smoke]
