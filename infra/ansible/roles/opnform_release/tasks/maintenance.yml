@@ -24,3 +24,35 @@
   ansible.builtin.service:
     name: "{{ opnform_caddy_service_name }}"
     state: reloaded
+
+- name: Probe Caddy maintenance through the local origin
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --include
+      - --max-time
+      - '15'
+      - --resolve
+      - "{{ opnform_hostname }}:443:127.0.0.1"
+      - "--cacert"
+      - /etc/ssl/certs/ca-certificates.crt
+      - "https://{{ opnform_hostname }}/v"
+  register: opnform_maintenance_probe
+  changed_when: false
+  failed_when: false
+  when: opnform_maintenance_verify | default(false) | bool
+
+- name: Require a maintenance response before continuing
+  ansible.builtin.assert:
+    that:
+      - "'HTTP/' in (opnform_maintenance_probe.stdout | default(''))"
+      - "'503' in (opnform_maintenance_probe.stdout | default('')).splitlines()[0]"
+      - "'OpnForm is temporarily undergoing maintenance.' in (opnform_maintenance_probe.stdout | default(''))"
+    fail_msg: >-
+      Caddy reloaded but maintenance is not active for https://{{ opnform_hostname }}/v.
+      Refusing to change live configuration.
+  when:
+    - opnform_maintenance_verify | default(false) | bool
+    - opnform_maintenance_enabled | bool

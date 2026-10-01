@@ -1,0 +1,15 @@
+# Temporary maintenance-only site used while restoring a release whose own
+# Caddy file may not hold Cloudflare clients during maintenance.
+{{ opnform_hostname }} {
+    tls {
+        issuer acme {
+            email {{ opnform_caddy_email }}
+            dns cloudflare {env.CLOUDFLARE_DNS_API_TOKEN}
+            resolvers 1.1.1.1
+            disable_http_challenge
+            disable_tlsalpn_challenge
+        }
+    }
+    header Retry-After "120"
+    respond "OpnForm is temporarily undergoing maintenance." 503
+}

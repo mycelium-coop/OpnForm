@@ -670,12 +670,14 @@ behind you are.
 tag on the first line, `sha-<fork commit>` on the second). Use it to confirm
 the running image without SSH.
 
-The release recreates ingress after rendering its Nginx configuration so new
-routes take effect even when the ingress image is unchanged. Before marking the
-release current, it checks that `/v` reports the expected release SHA as plain
-text and that `/api/_nuxt_icon/` returns SVG data for both Heroicons and Material
-Symbols through ingress. Nuxt serves icon requests; other `/api/` requests
-continue to Laravel.
+The release copies upstream `docker/nginx.conf` into the release bundle and
+recreates ingress before the whole-stack health wait so upstream’s static
+backend hostnames resolve to the new containers. Before marking the release
+current, private checks assert `/api/v` and `/_nuxt_icon/` SVG bodies, then
+public Caddy checks assert `/v` and both the new and legacy icon paths. Nuxt
+serves `/_nuxt_icon/`; other `/api/` requests continue to Laravel. Caddy
+rewrites public `/v` to `/api/v` and legacy `/api/_nuxt_icon/*` to
+`/_nuxt_icon/*`.
 
 To skip Pest while still running lint and refusing a dirty worktree (also
 honored by `just release-check`, `just build`, and `just publish`):
@@ -732,7 +734,8 @@ remove `.deploy/releases`. Publishing always writes to
 - Later releases use a short maintenance window; the API container applies
   migrations at startup.
 - After success, `just smoke` (also run automatically) should pass
-  `/api/healthcheck` and `/login`.
+  `/api/healthcheck`, `/login`, public `/v`, and both Nuxt icon paths.
+- Run `just routing-check` after Nginx, Caddy, Compose, or icon routing changes.
 - Public URL: `https://<OPNFORM_HOSTNAME>`. With Cloudflare proxying and Caddy
   origin lockdown, browsing the raw VPS IP returns HTTP 403 until the network
   origin lock is enabled; after `just origin-lock-enable`, direct origin TCP

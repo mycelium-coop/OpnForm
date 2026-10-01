@@ -108,6 +108,10 @@ deploy:
 smoke:
     @scripts/infra/smoke.sh
 
+# Validate Caddy/Nginx routing fixtures against upstream docker/nginx.conf.
+routing-check:
+    @scripts/infra/routing-check.sh
+
 # Validate the current commit before building a release. SKIP_TESTS=1 skips Pest.
 release-check:
     @scripts/infra/release.sh check

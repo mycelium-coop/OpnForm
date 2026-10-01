@@ -23,4 +23,84 @@
   ansible.builtin.uri:
     url: http://127.0.0.1:8080/api/healthcheck
     status_code: 200
-    return_content: false
+    return_content: true
+  register: opnform_smoke_health
+  failed_when: >-
+    opnform_smoke_health.status != 200 or
+    (opnform_smoke_health.json.status | default('')) != 'ok'
+
+- name: Check the private Laravel version endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v
+    status_code: 200
+    return_content: true
+  register: opnform_smoke_version
+  failed_when: >-
+    opnform_smoke_version.status != 200 or
+    'text/plain' not in (opnform_smoke_version.content_type | default('')) or
+    (opnform_smoke_version.content | default('')).splitlines() | length != 2
+
+- name: Resolve the current release identifier for icon probing
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - -f
+      - "{{ opnform_project_dir }}/current"
+  register: opnform_smoke_current_link
+  changed_when: false
+
+- name: Set the current release identifier for icon probing
+  ansible.builtin.set_fact:
+    opnform_smoke_current_release: "{{ opnform_smoke_current_link.stdout | basename }}"
+
+- name: Check for a per-release Nginx artifact
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_smoke_current_release }}/nginx.conf"
+  register: opnform_smoke_release_nginx
+
+- name: Check for the shared pre-migration Nginx path
+  ansible.builtin.stat:
+    path: "{{ opnform_project_dir }}/config/nginx.conf"
+  register: opnform_smoke_shared_nginx
+
+- name: Read the active Nginx template for icon path selection
+  ansible.builtin.slurp:
+    src: >-
+      {{
+        opnform_smoke_release_nginx.stat.path
+        if opnform_smoke_release_nginx.stat.exists
+        else opnform_project_dir ~ '/config/nginx.conf'
+      }}
+  register: opnform_smoke_nginx_slurp
+  when: >-
+    opnform_smoke_release_nginx.stat.exists or
+    opnform_smoke_shared_nginx.stat.exists
+
+# Older fork Nginx special-cases /api/_nuxt_icon for the pre-change client.
+# Upstream Nginx has no such location; new clients serve /_nuxt_icon.
+- name: Select the Nuxt icon probe prefix for the retained release
+  ansible.builtin.set_fact:
+    opnform_icon_probe_prefix: >-
+      {{
+        '/api/_nuxt_icon'
+        if (
+          opnform_smoke_nginx_slurp is defined
+          and opnform_smoke_nginx_slurp.content is defined
+          and ('location ^~ /api/_nuxt_icon' in (opnform_smoke_nginx_slurp.content | b64decode))
+        )
+        else '/_nuxt_icon'
+      }}
+
+- name: Check Nuxt icons through private ingress
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8080{{ opnform_icon_probe_prefix }}/{{ item.collection }}.json?icons={{ item.icon }}"
+    status_code: 200
+    return_content: true
+  loop:
+    - { collection: heroicons, icon: chevron-up-down-16-solid }
+    - { collection: material-symbols, icon: check-box-outline-blank }
+  register: opnform_smoke_icon
+  failed_when: >-
+    opnform_smoke_icon.status != 200 or
+    opnform_smoke_icon.json.prefix | default('') != item.collection or
+    opnform_smoke_icon.json.icons[item.icon].body | default('') | length == 0

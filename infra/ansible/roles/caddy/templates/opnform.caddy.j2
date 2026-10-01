@@ -18,11 +18,26 @@
         Referrer-Policy "strict-origin-when-cross-origin"
     }
 
-    import {{ opnform_maintenance_file }}
+    # Fork-only paths. Preserve method, body, and query string.
+    @opnform_version path /v
+    rewrite @opnform_version /api/v
 
+    # Compatibility for browsers still requesting the previous Nuxt Icon path.
+    # Supports an old browser talking to the new Nuxt server only.
+    @legacy_nuxt_icon path /api/_nuxt_icon /api/_nuxt_icon/*
+    uri @legacy_nuxt_icon strip_prefix /api
+
+    # Keep maintenance ahead of the Cloudflare gate. Outside `route`, Caddy
+    # sorts matched handles before catch-all handles, so import order alone
+    # does not hold Cloudflare clients during maintenance.
+    route {
+        import {{ opnform_maintenance_file }}
 {% if opnform_cloudflare_proxied | bool and opnform_caddy_origin_lockdown | bool %}
-    import {{ opnform_cloudflare_gate_snippet }}
+        import {{ opnform_cloudflare_gate_snippet }}
 {% else %}
-    reverse_proxy 127.0.0.1:8080
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Forwarded-Port 443
+        }
 {% endif %}
+    }
 }

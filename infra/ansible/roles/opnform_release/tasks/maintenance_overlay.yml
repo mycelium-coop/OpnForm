@@ -1,0 +1,54 @@
+---
+# Replace the live site with a maintenance-only Caddy config that does not
+# depend on handle ordering. Used while restoring a previous release whose
+# own site may not hold Cloudflare clients during maintenance.
+
+- name: Install the maintenance-only Caddy overlay
+  ansible.builtin.template:
+    src: maintenance_overlay.caddy.j2
+    dest: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Validate the maintenance overlay
+  ansible.builtin.command:
+    argv:
+      - "{{ opnform_caddy_custom_binary }}"
+      - validate
+      - --config
+      - "{{ opnform_caddy_config_path }}"
+      - --adapter
+      - caddyfile
+  changed_when: false
+  environment:
+    CLOUDFLARE_DNS_API_TOKEN: "{{ opnform_caddy_dns_api_token }}"
+
+- name: Reload Caddy with the maintenance overlay
+  ansible.builtin.service:
+    name: "{{ opnform_caddy_service_name }}"
+    state: reloaded
+
+- name: Probe the maintenance overlay through the local origin
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --include
+      - --max-time
+      - '15'
+      - --resolve
+      - "{{ opnform_hostname }}:443:127.0.0.1"
+      - "https://{{ opnform_hostname }}/v"
+  register: opnform_overlay_probe
+  changed_when: false
+  failed_when: false
+
+- name: Require the maintenance overlay to answer before continuing recovery
+  ansible.builtin.assert:
+    that:
+      - "'HTTP/' in (opnform_overlay_probe.stdout | default(''))"
+      - "'503' in (opnform_overlay_probe.stdout | default('')).splitlines()[0]"
+      - "'OpnForm is temporarily undergoing maintenance.' in (opnform_overlay_probe.stdout | default(''))"
+    fail_msg: The maintenance overlay did not return 503 for the local origin probe.

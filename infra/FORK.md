@@ -13,6 +13,14 @@ deployment stack under `infra/` merge-friendly.
   (`scripts/infra/check-upstream-allowlist.sh`) compares against this file,
   not the original fork point, so merging newer upstream commits does not
   fail CI as unexpected fork drift.
+- **Current baseline:** `e087b570182571ee721e1564d8d03347ed327c10`. That
+  commit contains 12 upstream commits after the newest stable tag
+  (`v2.5.0`). Keep the SHA truthful; do not relabel it as `v2.5.0`.
+  Reconciling onto a later stable tag is a separate maintenance task.
+- **Production update policy:** merge an explicitly selected **stable
+  upstream release tag**, preserve fork customizations, and deploy digest-
+  pinned fork images. Treat instructions that say to merge upstream `main`
+  as development-only.
 - Fetch with: `git fetch https://github.com/OpnForm/OpnForm.git main`
 - Compare with:
   `git diff "$(cat infra/upstream-baseline)"..upstream/main`
@@ -46,6 +54,7 @@ merging newer upstream commits into them):
 | `api/tests/Feature/SelfHosted/SelfHostedOidcSanctumRoutesTest.php` | Covers the OIDC Sanctum allowlist append |
 | `api/tests/Feature/SelfHosted/SelfHostedVersionEndpointTest.php` | Covers the plain-text `/v` version body |
 | `client/components/workspaces/settings/sso/Oidc.vue` | Hoists `updateMutation` into setup; `useMutation()` cannot run inside a click handler |
+| `client/nuxt.config.ts` | Sets `icon.localApiEndpoint: '/_nuxt_icon'` so Nuxt Icon stays outside Laravel `/api`. Enforced by `scripts/infra/check-nuxt-icon-endpoint.sh`. |
 
 Any other change under upstream-owned trees should be reverted or moved into
 fork-owned paths.
@@ -78,24 +87,31 @@ automatically.
 | `SelfHostedOidcSanctumServiceProvider` | `php vendor/bin/pest --filter='DualAuthMiddlewareTest|SelfHostedOidcSanctumRoutesTest'` from `api/` (after the env prep in `scripts/infra/release.sh` `release_check`) |
 | `SelfHostedVersionEndpointServiceProvider` | `php vendor/bin/pest --filter='SelfHostedVersionEndpointTest'` from `api/` |
 | `Oidc.vue` `updateMutation` hoist | Manual SSO settings UI; no dedicated automated test |
+| `client/nuxt.config.ts` icon endpoint | `bash scripts/infra/check-nuxt-icon-endpoint.sh` |
 | `infra/docker` images | `scripts/infra/check-fork-images.sh` |
+| Upstream Nginx + Caddy routing | `just routing-check` |
 
 ## Updating from upstream
 
-1. Fetch and merge upstream `main` into this branch.
+1. Select a stable upstream release tag (or, for development only, fetch
+   upstream `main`). Merge it into this branch while preserving fork
+   customizations.
 2. Set `infra/upstream-baseline` to the incorporated upstream tip (the merge
-   parent from upstream, or `upstream/main` after a fast-forward). Commit that
+   parent from upstream, or the selected tag’s commit). Commit that
    file with the merge so the allowlist guard measures only fork differences.
    The next image build sets `APP_VERSION` to the newest `vX.Y.Z` tag on
    OpnForm/OpnForm that is contained in this baseline.
 3. Diff `docker/Dockerfile.api` and `docker/Dockerfile.client` against the
    previous baseline; update `infra/docker/` if needed.
-4. Run the allowlist guard:
+4. Run the allowlist and Nuxt icon guards:
    `bash scripts/infra/check-upstream-allowlist.sh`
-   (also runs in `.github/workflows/fork-upstream-guard.yml`).
+   `bash scripts/infra/check-nuxt-icon-endpoint.sh`
+   (also run in `.github/workflows/fork-upstream-guard.yml`).
 5. Run `bash scripts/infra/check-fork-images.sh` when Dockerfiles or their
    ignore files changed.
-6. From `api/`, with the same env prep as `release_check`, run:
+6. Run `bash scripts/infra/routing-check.sh` (or `just routing-check`) when
+   Nginx, Caddy, Compose, or icon routing changed.
+7. From `api/`, with the same env prep as `release_check`, run:
 
    ```bash
    php -d memory_limit=512M ./vendor/bin/pest --filter='DualAuthMiddlewareTest|SelfHostedOidcSanctumRoutesTest|SelfHostedVersionEndpointTest'

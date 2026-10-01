@@ -21,8 +21,10 @@
     - { path: '{{ opnform_project_dir }}', mode: '0700' }
     - { path: '{{ opnform_project_dir }}/config', mode: '0700' }
     - { path: '{{ opnform_project_dir }}/secrets', mode: '0700' }
+    - { path: '{{ opnform_project_dir }}/recovery', mode: '0700' }
     - { path: '{{ opnform_release_dir }}', mode: '0700' }
     - { path: '{{ opnform_release_dir }}/{{ opnform_release_id }}', mode: '0700' }
+    - { path: '{{ opnform_release_dir }}/{{ opnform_release_id }}/routing', mode: '0700' }
     - { path: '{{ opnform_backup_dir }}', mode: '0700' }
 
 - name: Authenticate root Docker client to GHCR with the read-only token
@@ -73,13 +75,25 @@
   no_log: true
   diff: false
 
-- name: Render ingress Nginx configuration
-  ansible.builtin.template:
-    src: nginx.conf.j2
-    dest: "{{ opnform_project_dir }}/config/nginx.conf"
+- name: Install upstream Nginx configuration into the release bundle
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../docker/nginx.conf') }}"
+    dest: "{{ opnform_release_dir }}/{{ opnform_release_id }}/nginx.conf"
     owner: root
     group: root
     mode: '0644'
+
+- name: Read the release Nginx template checksum
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_release_id }}/nginx.conf"
+    checksum_algorithm: sha256
+  register: opnform_release_nginx_stat
+
+- name: Verify the release Nginx template matches upstream docker/nginx.conf
+  ansible.builtin.assert:
+    that:
+      - opnform_release_nginx_stat.stat.checksum == (lookup('ansible.builtin.file', playbook_dir ~ '/../../docker/nginx.conf') | hash('sha256'))
+    fail_msg: The release Nginx template does not match docker/nginx.conf byte-for-byte.
 
 - name: Render immutable OpnForm Compose release bundle
   ansible.builtin.template:

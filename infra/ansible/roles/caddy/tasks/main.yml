@@ -182,6 +182,38 @@
       ansible.builtin.service:
         name: "{{ opnform_caddy_service_name }}"
         state: reloaded
+
+    - name: Create the release routing directory for Caddy artifacts
+      ansible.builtin.file:
+        path: "{{ opnform_release_dir }}/{{ opnform_release_id }}/routing"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: opnform_release_id | length > 0
+
+    - name: Store the rendered Caddy site with the release
+      ansible.builtin.copy:
+        src: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        dest: "{{ opnform_release_dir }}/{{ opnform_release_id }}/routing/opnform.caddy"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: opnform_release_id | length > 0
+
+    - name: Store the Cloudflare gate snippet with the release
+      ansible.builtin.copy:
+        src: "{{ opnform_cloudflare_gate_snippet }}"
+        dest: "{{ opnform_release_dir }}/{{ opnform_release_id }}/routing/opnform-cloudflare-gate.caddy"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - opnform_release_id | length > 0
+        - opnform_cloudflare_proxied | bool
+        - opnform_caddy_origin_lockdown | bool
   rescue:
     - name: Restore the previous Caddyfile
       ansible.builtin.copy:

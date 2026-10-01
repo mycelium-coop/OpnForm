@@ -16,10 +16,20 @@
       - opnform_rollback_bundle.stat.exists
     fail_msg: The requested rollback release is not retained on this VPS.
 
-- name: Enter maintenance mode before rollback
-  ansible.builtin.include_tasks: maintenance.yml
-  vars:
-    opnform_maintenance_enabled: true
+- name: Check for the rollback release Nginx artifact
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/nginx.conf"
+  register: opnform_rollback_nginx
+
+- name: Check for the rollback release Caddy site
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/routing/opnform.caddy"
+  register: opnform_rollback_caddy
+
+- name: Check for the rollback release Cloudflare gate
+  ansible.builtin.stat:
+    path: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/routing/opnform-cloudflare-gate.caddy"
+  register: opnform_rollback_gate
 
 - name: Roll back with recovery protection
   block:
@@ -29,7 +39,63 @@
       changed_when: false
       no_log: true
 
-    - name: Start the retained rollback release
+    - name: Install the maintenance overlay before restoring the target release
+      ansible.builtin.include_tasks: maintenance_overlay.yml
+
+    - name: Read the rollback Compose bundle
+      ansible.builtin.slurp:
+        src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/docker-compose.yml"
+      register: opnform_rollback_compose_slurp
+
+    - name: Restore the shared Nginx path when the target release mounts it
+      ansible.builtin.copy:
+        src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/nginx.conf"
+        dest: "{{ opnform_project_dir }}/config/nginx.conf"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - opnform_rollback_nginx.stat.exists
+        - (opnform_project_dir ~ '/config/nginx.conf') in (opnform_rollback_compose_slurp.content | b64decode)
+
+    - name: Start the retained rollback release application containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/docker-compose.yml"
+          - up
+          - -d
+          - --no-deps
+          - --remove-orphans
+          - api
+          - api-worker
+          - api-scheduler
+          - ui
+          - redis
+          - db
+      changed_when: true
+
+    - name: Recreate ingress for the retained rollback release
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/docker-compose.yml"
+          - up
+          - -d
+          - --no-deps
+          - --force-recreate
+          - --wait
+          - --wait-timeout
+          - '60'
+          - ingress
+      changed_when: true
+
+    - name: Wait for the retained rollback release stack
       ansible.builtin.command:
         argv:
           - docker
@@ -44,6 +110,12 @@
           - --remove-orphans
       changed_when: true
 
+    - name: Check private health on the restored release
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/healthcheck
+        status_code: 200
+        return_content: false
+
     - name: Point current release at the retained release
       ansible.builtin.file:
         src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}"
@@ -51,30 +123,133 @@
         state: link
         force: true
 
-    - name: Leave maintenance mode after rollback
+    - name: Restore the retained release Caddy site
+      ansible.builtin.copy:
+        src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/routing/opnform.caddy"
+        dest: "{{ opnform_caddy_snippet_dir }}/opnform.caddy"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: opnform_rollback_caddy.stat.exists
+
+    - name: Restore the retained release Cloudflare gate
+      ansible.builtin.copy:
+        src: "{{ opnform_release_dir }}/{{ opnform_rollback_release }}/routing/opnform-cloudflare-gate.caddy"
+        dest: "{{ opnform_cloudflare_gate_snippet }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: opnform_rollback_gate.stat.exists
+
+    - name: Disable maintenance on the restored release routing
       ansible.builtin.include_tasks: maintenance.yml
       vars:
         opnform_maintenance_enabled: false
+      when: opnform_rollback_caddy.stat.exists
+
+    - name: Validate restored Caddy configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ opnform_caddy_custom_binary }}"
+          - validate
+          - --config
+          - "{{ opnform_caddy_config_path }}"
+          - --adapter
+          - caddyfile
+      changed_when: false
+      environment:
+        CLOUDFLARE_DNS_API_TOKEN: "{{ opnform_caddy_dns_api_token }}"
+      when: opnform_rollback_caddy.stat.exists
+
+    - name: Reload Caddy with the restored release routing
+      ansible.builtin.service:
+        name: "{{ opnform_caddy_service_name }}"
+        state: reloaded
+      when: opnform_rollback_caddy.stat.exists
+
+    - name: Leave the maintenance overlay when the target has no stored Caddy site
+      ansible.builtin.debug:
+        msg: >-
+          Rollback restored containers, but the target release has no stored
+          Caddy site. Maintenance overlay remains enabled.
+      when: not opnform_rollback_caddy.stat.exists
   rescue:
-    - name: Restore the current release containers after failed rollback
+    - name: Install the maintenance overlay after a failed rollback
+      ansible.builtin.include_tasks: maintenance_overlay.yml
+
+    # `current` may already point at the rollback target. Restore the release
+    # captured before this rollback began.
+    - name: Point current back at the release captured before rollback
+      ansible.builtin.file:
+        src: "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}"
+        dest: "{{ opnform_project_dir }}/current"
+        state: link
+        force: true
+      when:
+        - opnform_prepare_current_release is defined
+        - opnform_prepare_current_release | length > 0
+
+    - name: Restore the pre-rollback release containers
       ansible.builtin.command:
         argv:
           - docker
           - compose
           - -f
-          - "{{ opnform_compose_file }}"
+          - "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/docker-compose.yml"
+          - up
+          - -d
+          - --no-deps
+          - --remove-orphans
+          - api
+          - api-worker
+          - api-scheduler
+          - ui
+          - redis
+          - db
+      changed_when: true
+      when:
+        - opnform_prepare_current_release is defined
+        - opnform_prepare_current_release | length > 0
+
+    - name: Recreate ingress for the pre-rollback release
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/docker-compose.yml"
+          - up
+          - -d
+          - --no-deps
+          - --force-recreate
+          - --wait
+          - --wait-timeout
+          - '60'
+          - ingress
+      changed_when: true
+      when:
+        - opnform_prepare_current_release is defined
+        - opnform_prepare_current_release | length > 0
+
+    - name: Wait for the pre-rollback release stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ opnform_release_dir }}/{{ opnform_prepare_current_release }}/docker-compose.yml"
           - up
           - -d
           - --wait
           - --wait-timeout
           - '300'
       changed_when: true
+      when:
+        - opnform_prepare_current_release is defined
+        - opnform_prepare_current_release | length > 0
 
-    - name: Leave maintenance mode after failed rollback
-      ansible.builtin.include_tasks: maintenance.yml
-      vars:
-        opnform_maintenance_enabled: false
-
-    - name: Stop after restoring the current release
+    - name: Stop after restoring the pre-rollback release
       ansible.builtin.fail:
-        msg: Rollback failed. The current release was restored and reopened.
+        msg: Rollback failed. The previous release was restored. Maintenance remains enabled.

@@ -206,6 +206,7 @@ handle @cloudflare {{
 \t\theader_up X-Forwarded-For {{http.request.header.CF-Connecting-IP}}
 \t\theader_up X-Real-IP {{http.request.header.CF-Connecting-IP}}
 \t\theader_up X-Forwarded-Proto https
+\t\theader_up X-Forwarded-Port 443
 \t}}
 }}
 handle {{
