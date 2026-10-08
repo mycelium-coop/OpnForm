@@ -14,9 +14,13 @@
         -Server
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
         Referrer-Policy "strict-origin-when-cross-origin"
     }
+
+    # Public forms are embeddable across origins. Keep a framing default for
+    # other routes without overriding stricter upstream headers (e.g. OAuth).
+    @non_form_routes not path /forms/*
+    header @non_form_routes ?X-Frame-Options "SAMEORIGIN"
 
     # Fork-only paths. Preserve method, body, and query string.
     @opnform_version path /v

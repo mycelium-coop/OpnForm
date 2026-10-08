@@ -139,9 +139,13 @@ ui = workdir / "ui"
 api.mkdir()
 ui.mkdir()
 (ui / "_nuxt_icon").mkdir()
+(ui / "forms").mkdir()
 (api / "index.php").write_text(
     "<?php\n"
     "$uri = $_SERVER['REQUEST_URI'] ?? '';\n"
+    "if (str_starts_with($uri, '/frame-denied')) {\n"
+    "  header('X-Frame-Options: DENY');\n"
+    "}\n"
     "if (str_starts_with($uri, '/healthcheck')) {\n"
     "  header('Content-Type: application/json');\n"
     "  echo json_encode(['success' => true]);\n"
@@ -160,6 +164,8 @@ ui.mkdir()
     encoding="utf-8",
 )
 (ui / "login").write_text("ui-login\n", encoding="utf-8")
+(ui / "forms" / "cno-general-intake").write_text("ui-public-form\n", encoding="utf-8")
+(ui / "forms-admin").write_text("ui-protected\n", encoding="utf-8")
 (ui / "_nuxt_icon" / "heroicons.json").write_text(
     '{"prefix":"heroicons","icons":{"chevron-up-down-16-solid":{"body":"<path d=\\"M1\\"/>"}}}',
     encoding="utf-8",
@@ -349,6 +355,26 @@ fi
 
 login="$(curl -fsS "http://127.0.0.1:${external_port}/login")"
 assert_contains "${login}" 'ui-login' "nuxt login"
+
+# Cross-origin form navigation must not inherit the proxy's framing default.
+for path in /forms/cno-general-intake '/forms/cno-general-intake?embed=true'; do
+  form="$(curl -fsS -D "${workdir}/form.headers" \
+    -H 'Sec-Fetch-Dest: iframe' -H 'Sec-Fetch-Site: cross-site' \
+    "http://127.0.0.1:${external_port}${path}")"
+  assert_contains "${form}" 'ui-public-form' "public form body"
+  if grep -Eiq '^X-Frame-Options:' "${workdir}/form.headers"; then
+    printf '%s\n' "Public form unexpectedly has X-Frame-Options." >&2
+    exit 1
+  fi
+done
+
+for path in /login /forms /forms-admin; do
+  headers="$(curl -sSI "http://127.0.0.1:${external_port}${path}")"
+  printf '%s' "${headers}" | tr -d '\r' | grep -Eiq '^X-Frame-Options: SAMEORIGIN$'
+done
+headers="$(curl -fsSI "http://127.0.0.1:${external_port}/api/frame-denied")"
+printf '%s' "${headers}" | tr -d '\r' | grep -Eiq '^X-Frame-Options: DENY$'
+printf '%s\n' "Public form framing and protected-route headers passed."
 
 api_echo="$(curl -fsS -H 'X-Forwarded-Port: 9999' -H 'CF-Connecting-IP: 198.51.100.50' \
   "http://127.0.0.1:${external_port}/api/echo-headers")"

@@ -679,6 +679,15 @@ serves `/_nuxt_icon/`; other `/api/` requests continue to Laravel. Caddy
 rewrites public `/v` to `/api/v` and legacy `/api/_nuxt_icon/*` to
 `/_nuxt_icon/*`.
 
+Public form pages (`/forms/*`) can be embedded on other websites using the
+generated iframe and widget script. Caddy adds `X-Frame-Options: SAMEORIGIN`
+only as a default on other routes and preserves stricter upstream headers.
+If an embed loads with HTTP 200 but the browser refuses to display it, inspect
+the form response for `X-Frame-Options` or a CSP `frame-ancestors` restriction.
+Cloudflare response transforms must not add these restrictions to public forms.
+The Caddy template change takes effect through the release deployment workflow;
+changing the client's embed snippet cannot override a server framing policy.
+
 To skip Pest while still running lint and refusing a dirty worktree (also
 honored by `just release-check`, `just build`, and `just publish`):
 
