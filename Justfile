@@ -112,6 +112,10 @@ smoke:
 routing-check:
     @scripts/infra/routing-check.sh
 
+# Manage the pinned custom Caddy binary: just caddy-binary <checksum|fetch|publish|build> <amd64|arm64>.
+caddy-binary action arch:
+    @scripts/infra/caddy-binary.sh {{ action }} {{ arch }}
+
 # Validate the current commit before building a release. SKIP_TESTS=1 skips Pest.
 release-check:
     @scripts/infra/release.sh check

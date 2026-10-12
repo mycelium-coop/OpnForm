@@ -769,11 +769,41 @@ Two layers protect the origin:
 
 Caddy uses **DNS-01** via `caddy-dns/cloudflare` and
 `CLOUDFLARE_DNS_API_TOKEN`, so certificate renewal is outbound-only and does
-not require inbound Let's Encrypt access. The custom binary pins both Caddy and
-the Cloudflare plugin and verifies an architecture-specific SHA-256 before
-installation. When either version changes, rebuild and review both `amd64` and
-`arm64` binaries, then update the versions and checksums together in
-`infra/ansible/roles/caddy/defaults/main.yml`.
+not require inbound Let's Encrypt access. The custom binary is the reviewed
+Caddy v2.11.4 build with `caddy-dns/cloudflare` v0.2.4. Its SHA-256 is pinned in
+`infra/ansible/roles/caddy/defaults/main.yml`. The bytes are stored in the R2
+backup bucket at `caddy/<version>/linux-<arch>/<sha256>`, outside the restic
+`opnform/` prefix. A later build uses a new key, so older commits can still
+fetch the binary they pin. `https://caddyserver.com/api/download` ignores a
+Caddy `version` parameter and replaces its cached file when a new release is
+published, so deploys do not download from it.
+
+Only architectures with a published checksum are supported. Today that is
+`linux/amd64`. An unsupported `IMAGE_PLATFORM` fails before maintenance starts.
+When the installed file already matches the pin, deploy skips the download. When
+it does not, the controller fetches and checksums the artifact, copies it to
+`/opt/opnform/incoming/`, and checks that copy again before maintenance.
+
+To replace the binary, set `opnform_caddy_custom_version` and
+`opnform_caddy_cloudflare_plugin_version` in the role defaults first. `build`
+reads those pins. Then build with the pinned `caddy:2.11.4-builder` image
+(`xcaddy` selects that Caddy version and plugin version):
+
+```sh
+just caddy-binary build amd64
+```
+
+Review the printed `caddy version` line. Set only
+`opnform_caddy_custom_checksums` to the printed SHA-256, then publish:
+
+```sh
+just caddy-binary publish amd64
+```
+
+Publish checks that SHA-256 and refuses a file whose embedded Caddy or plugin
+version differs from the defaults. It also leaves an existing object in place.
+`just caddy-binary fetch amd64` downloads that object and rejects a checksum
+mismatch. The builder image digest is pinned in `scripts/infra/caddy-binary.sh`.
 
 ### Rollout
 

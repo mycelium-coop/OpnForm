@@ -25,13 +25,15 @@
   register: opnform_caddy_installed_version
   changed_when: false
 
-- name: Require native Caddy v2, hostname, and email
+- name: Require the pinned Caddy version, hostname, and email
   ansible.builtin.assert:
     that:
-      - opnform_caddy_installed_version.stdout is search('v?2\\.')
+      - (opnform_caddy_installed_version.stdout.split() | first) == opnform_caddy_custom_version
       - opnform_hostname | length > 0
       - opnform_caddy_email | length > 0
-    fail_msg: A supported native Caddy v2, hostname, and Caddy email are required.
+    fail_msg: >-
+      Custom Caddy must report {{ opnform_caddy_custom_version }}. A hostname
+      and Caddy email are also required.
 
 - name: Check the configured Caddyfile exists
   ansible.builtin.stat:

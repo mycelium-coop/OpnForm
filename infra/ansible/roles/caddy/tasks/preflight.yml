@@ -1,0 +1,79 @@
+---
+- name: Reject an unsupported Caddy architecture before maintenance
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_image_platform in opnform_caddy_platform_arches
+      - opnform_caddy_binary_arch in opnform_caddy_custom_checksums
+    fail_msg: >-
+      No published Caddy artifact for IMAGE_PLATFORM={{ opnform_caddy_image_platform }}
+      ({{ opnform_caddy_binary_arch | default('unmapped') }}).
+      Published architectures: {{ opnform_caddy_custom_checksums.keys() | list | join(', ') }}.
+      Refusing to enable maintenance.
+
+- name: Checksum the installed custom Caddy binary
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_custom_binary }}"
+    checksum_algorithm: sha256
+  register: opnform_caddy_installed_binary
+
+- name: Record whether the pinned Caddy binary is already installed
+  ansible.builtin.set_fact:
+    opnform_caddy_binary_current: >-
+      {{
+        (opnform_caddy_installed_binary.stat.exists | bool)
+        and (
+          (opnform_caddy_installed_binary.stat.checksum | default(''))
+          == opnform_caddy_custom_checksums[opnform_caddy_binary_arch]
+        )
+      }}
+
+- name: Fetch the pinned Caddy artifact on the controller
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ playbook_dir | dirname | dirname }}/scripts/infra/caddy-binary.sh"
+      - fetch
+      - "{{ opnform_caddy_binary_arch }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: opnform_caddy_fetch
+  changed_when: (opnform_caddy_fetch.stdout | trim) == 'downloaded'
+
+- name: Create the incoming Caddy artifact directory
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.file:
+    path: "{{ opnform_caddy_incoming_binary | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Stage the pinned Caddy artifact on the host
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/.deploy/caddy/caddy-linux-{{ opnform_caddy_binary_arch }}"
+    dest: "{{ opnform_caddy_incoming_binary }}"
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Checksum the staged Caddy artifact
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_incoming_binary }}"
+    checksum_algorithm: sha256
+  register: opnform_caddy_staged_binary
+
+- name: Require the staged Caddy artifact to match the pinned checksum
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_staged_binary.stat.exists | bool
+      - >-
+        (opnform_caddy_staged_binary.stat.checksum | default(''))
+        == opnform_caddy_custom_checksums[opnform_caddy_binary_arch]
+    fail_msg: >-
+      Staged Caddy artifact {{ opnform_caddy_incoming_binary }} does not match
+      the pinned SHA-256. Refusing to enable maintenance.

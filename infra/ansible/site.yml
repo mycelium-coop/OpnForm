@@ -19,6 +19,15 @@
         name: cloudflare_origin_lock
       tags: [cloudflare_origin_lock]
 
+    # Stage a missing Caddy artifact before maintenance. A missing or corrupt
+    # file, or an architecture without a published checksum, stops the play
+    # while the site is still serving.
+    - name: Stage the pinned Caddy artifact before maintenance
+      ansible.builtin.import_role:
+        name: caddy
+        tasks_from: preflight.yml
+      tags: [opnform_release, caddy, opnform]
+
     # tasks_from on a roles: entry is stored as a variable and main.yml still
     # runs. import_role is what selects prepare.yml. Snapshot and verified
     # maintenance must run before caddy or opnform change live configuration.
