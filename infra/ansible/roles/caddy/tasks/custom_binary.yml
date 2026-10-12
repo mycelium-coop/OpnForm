@@ -8,17 +8,44 @@
       DNS:Edit). Add cloudflare-dns-api-token to tech-admin/opnform-secrets and
       re-run `just env`.
 
-- name: Download Caddy binary with the Cloudflare DNS plugin
-  ansible.builtin.get_url:
-    url: "{{ opnform_caddy_download_url }}"
-    dest: "{{ opnform_caddy_custom_binary }}.tmp"
-    owner: root
-    group: root
-    mode: '0755'
-    checksum: "sha256:{{ opnform_caddy_custom_checksums[opnform_caddy_download_arch] }}"
-    timeout: 120
+- name: Checksum the installed custom Caddy binary
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_custom_binary }}"
+    checksum_algorithm: sha256
+  register: opnform_caddy_installed_binary
 
-- name: Install the custom Caddy binary atomically
+- name: Record whether the pinned Caddy binary is already installed
+  ansible.builtin.set_fact:
+    opnform_caddy_binary_current: >-
+      {{
+        (opnform_caddy_installed_binary.stat.exists | bool)
+        and (
+          (opnform_caddy_installed_binary.stat.checksum | default(''))
+          == opnform_caddy_custom_checksums[opnform_caddy_binary_arch]
+        )
+      }}
+
+- name: Checksum the staged Caddy artifact
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.stat:
+    path: "{{ opnform_caddy_incoming_binary }}"
+    checksum_algorithm: sha256
+  register: opnform_caddy_staged_binary
+
+- name: Require the staged Caddy artifact before installation
+  when: not opnform_caddy_binary_current | bool
+  ansible.builtin.assert:
+    that:
+      - opnform_caddy_staged_binary.stat.exists | bool
+      - >-
+        (opnform_caddy_staged_binary.stat.checksum | default(''))
+        == opnform_caddy_custom_checksums[opnform_caddy_binary_arch]
+    fail_msg: >-
+      The pinned Caddy artifact is not staged at {{ opnform_caddy_incoming_binary }}.
+      Fetch and verify it before enabling maintenance.
+
+- name: Install the staged Caddy binary
+  when: not opnform_caddy_binary_current | bool
   ansible.builtin.command:
     argv:
       - install
@@ -28,23 +55,21 @@
       - root
       - -g
       - root
-      - "{{ opnform_caddy_custom_binary }}.tmp"
+      - "{{ opnform_caddy_incoming_binary }}"
       - "{{ opnform_caddy_custom_binary }}"
   changed_when: true
 
-- name: Remove the temporary Caddy download
-  ansible.builtin.file:
-    path: "{{ opnform_caddy_custom_binary }}.tmp"
-    state: absent
-
-- name: Verify the custom Caddy binary reports v2
+- name: Verify the custom Caddy binary reports the pinned version
   ansible.builtin.command:
     argv:
       - "{{ opnform_caddy_custom_binary }}"
       - version
   register: opnform_caddy_custom_version_check
   changed_when: false
-  failed_when: opnform_caddy_custom_version_check.stdout is not search('v?2\\.')
+  failed_when: >-
+    opnform_caddy_custom_version_check.rc != 0
+    or (opnform_caddy_custom_version_check.stdout.split() | first)
+    != opnform_caddy_custom_version
 
 - name: Verify the Cloudflare DNS module is present
   ansible.builtin.command:
