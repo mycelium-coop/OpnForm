@@ -465,6 +465,30 @@ application cache, including font availability.
 To disable, empty `GOOGLE_FONTS_API_KEY` in `.env` and deploy the release again.
 Also empty or remove the 1Password field to keep future environment renders disabled.
 
+### Custom code (optional)
+
+`CUSTOM_CODE_ENABLE_SELF_HOSTED` controls whether this self-hosted instance
+executes custom code. `.env.example` defaults it to `false`. Ansible copies the
+value into `/opt/opnform/secrets/api.env` on every release deploy. Saving
+workspace custom code still requires an active license whose features include
+`custom_code`.
+
+After setting `CUSTOM_CODE_ENABLE_SELF_HOSTED=true` in the local `.env`, deploy
+an existing published release using its release ID:
+
+```sh
+CONFIRM_PROD=opnform-prod just deploy-release sha-<sha>
+```
+
+That re-renders `/opt/opnform/secrets/api.env` and recreates the API containers.
+API startup runs `php artisan optimize:clear`, which drops the cached feature
+flags, then caches configuration from the new environment.
+
+To turn execution back off, set `CUSTOM_CODE_ENABLE_SELF_HOSTED=false` and
+deploy the release again. `just env` does not rewrite an existing `.env`, so
+add the variable there by hand when the file was rendered before this setting
+existed.
+
 ### OIDC (optional but enabled by default)
 
 `.env.example` sets `OIDC_ENABLED=true` and `OIDC_FORCE_LOGIN=true`. Leave both
@@ -526,6 +550,7 @@ These values are not injected from 1Password (or are safe defaults in
 | `OIDC_ENABLED` / `OIDC_FORCE_LOGIN` | See OIDC section. Force login disables password auth after an OIDC connection exists. |
 | `OIDC_*_JSON` | Must remain valid JSON strings. |
 | `GOOGLE_SHEETS_ENABLED` | Default `false`. When `true`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are required; apply with `just google-sheets`. |
+| `CUSTOM_CODE_ENABLE_SELF_HOSTED` | Default `false`. When `true`, this instance executes self-hosted custom code. The license must include `custom_code`. Apply with `just deploy-release`. |
 | `OPNFORM_DOCKER_SUBNET` / `OPNFORM_INGRESS_IP` | Must not collide with other Docker networks on the host. |
 | `IMAGE_PLATFORM` | Default `linux/amd64`; must match the VPS architecture. |
 | `BACKUP_*` | systemd timer schedule and restic retention. |
