@@ -71,7 +71,7 @@ build_image() {
   local image_tag="$2"
   local push="$3"
   resolve_app_version
-  local action_args=(--platform "${IMAGE_PLATFORM}" --provenance=true --sbom=true --build-arg "APP_VERSION=${app_version}" --build-arg "VCS_REF=$(git -C "${root}" rev-parse HEAD)" --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "${image_tag}" --file "${dockerfile}")
+  local action_args=(--pull --platform "${IMAGE_PLATFORM}" --provenance=true --sbom=true --build-arg "APP_VERSION=${app_version}" --build-arg "VCS_REF=$(git -C "${root}" rev-parse HEAD)" --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "${image_tag}" --file "${dockerfile}")
 
   if [[ "${push}" == "true" ]]; then
     action_args+=(--push)

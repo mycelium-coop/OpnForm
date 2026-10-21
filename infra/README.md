@@ -62,6 +62,8 @@ attestations are not supported by Desktop’s default `docker` driver.
 
 Release caching:
 
+- All release builds use `--pull` to refresh base images before reusing cached
+  layers, including PHP patch updates under the floating `php:8.3-fpm-alpine` tag.
 - Buildx configuration stays in `BUILDX_CONFIG` (or the original Docker config's
   `buildx` directory), separate from the temporary GHCR login credentials. The
   persistent `opnform-release` builder retains local layers and dependency caches.
